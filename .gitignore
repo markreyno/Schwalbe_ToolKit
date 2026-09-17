@@ -22,3 +22,8 @@ release-alignment/
 *.pfx
 *.p12
 release*/
+release-picker-dialog/
+release-notification-demo/
+release-toolhub-notifications/
+release-forklift/
+release-v1.2.0/

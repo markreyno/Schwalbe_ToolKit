@@ -1,9 +1,12 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 let app: ElectronApplication;
+let testProfile: string;
 test.beforeEach(async () => {
-  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), TOOLKIT_TEST_DATA: path.resolve('.cache/electron-test') };
+  testProfile = path.resolve('.cache/electron-test', randomUUID());
+  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), TOOLKIT_TEST_DATA: testProfile };
   delete env.ELECTRON_RUN_AS_NODE;
   if (process.env.TOOLKIT_EXECUTABLE) env.PYTHON_PATH = 'Z:\\python-is-not-installed\\python.exe';
   app = await electron.launch({ ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }), env });
@@ -69,7 +72,45 @@ test('hub search and available tools are clear', async () => {
   await expect(page.getByRole('heading', { name: 'No tools found' })).toBeVisible();
   await page.getByRole('button', { name: 'Clear search' }).click();
   await expect(page.getByRole('heading', { name: 'Pallet Label Printer' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open tool' })).toHaveCount(3);
+  await expect(page.getByRole('link', { name: 'Open tool' })).toHaveCount(4);
+});
+
+test('picker water reminders persist and clear when watered', async () => {
+  const page = await app.firstWindow();
+  await expect(page.locator('.sidebar').getByText('Picker water', { exact: true })).toHaveCount(0);
+  await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'Picker Water Scheduler' }) }).getByRole('link').click();
+  await page.getByLabel('Picker name').fill('Forklift A');
+  await page.getByLabel('Water every (days)').fill('14');
+  await page.getByLabel('Last watered').fill('2020-01-01');
+  await page.getByRole('button', { name: 'Add picker' }).click();
+  await expect(page.getByRole('status')).toContainText('1 picker needs water');
+  await page.getByRole('link', { name: 'Back to tool hub' }).click();
+  await expect(page.locator('.global-water-banner')).toContainText('1 picker needs water');
+  await page.locator('.global-water-banner').click();
+  await expect(page.locator('.global-water-banner')).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('Forklift A', { exact: true }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Mark watered' }).click();
+  await expect(page.locator('.nav-due-count')).toHaveCount(0);
+  await expect(page.getByText('Upcoming', { exact: true }).first()).toBeVisible();
+  const remove = page.getByRole('button', { name: 'Remove Forklift A', exact: true });
+  await remove.click();
+  const confirmation = page.getByRole('dialog', { name: 'Remove picker?' });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByRole('button', { name: 'Keep picker' })).toBeFocused();
+  await page.screenshot({ path: 'test-results/picker-remove-confirmation.png' });
+  await page.keyboard.press('Escape');
+  await expect(confirmation).not.toBeVisible();
+  await expect(remove).toBeFocused();
+  await remove.click();
+  await confirmation.getByRole('button', { name: 'Keep picker' }).click();
+  await expect(remove).toBeVisible();
+  await remove.click();
+  await confirmation.getByRole('button', { name: 'Remove picker', exact: true }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(remove).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('Add a picker to start its watering schedule.')).toBeVisible();
 });
 
 
@@ -158,7 +199,7 @@ test('raffle saves names across reload and restart, draws only current entries, 
   await page.reload();
   await expect(page.getByRole('listitem')).toHaveCount(2);
   await app.close();
-  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), TOOLKIT_TEST_DATA: path.resolve('.cache/electron-test') };
+  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), TOOLKIT_TEST_DATA: testProfile };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: ['.'], env });
   page = await app.firstWindow();
@@ -207,4 +248,25 @@ test('alignment prints one diagnostic label without shipment inputs', async () =
   expect(jobs[0].options.pageSize).toEqual({ width: 38100, height: 25400 });
   await expect(page.getByLabel('Company', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Total pallets')).toHaveValue('');
+});
+
+test('test notification demonstrates an overdue alert without changing schedules', async () => {
+  const page = await app.firstWindow();
+  await expect(page.getByRole('heading', { name: 'A place for every tool.' })).toBeVisible();
+  const before = await page.evaluate(() => localStorage.getItem('schwalbe-picker-water-v1'));
+  const testButton = page.getByRole('button', { name: 'Test notification', exact: true });
+  await testButton.click();
+  const demo = page.getByRole('alert');
+  await expect(demo).toContainText('DEMO NOTIFICATION');
+  await expect(demo).toContainText('1 picker needs water');
+  await expect(demo).toContainText('Watering overdue');
+  await testButton.click();
+  await expect(demo).toHaveCount(1);
+  await page.screenshot({ path: 'test-results/picker-test-notification.png' });
+  expect(await page.evaluate(() => localStorage.getItem('schwalbe-picker-water-v1'))).toBe(before);
+  await page.getByRole('button', { name: 'Dismiss test notification' }).click();
+  await expect(demo).toHaveCount(0);
+  await testButton.click();
+  await page.reload();
+  await expect(demo).toHaveCount(0);
 });
