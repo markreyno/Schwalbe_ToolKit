@@ -72,7 +72,7 @@ test('hub search and available tools are clear', async () => {
   await expect(page.getByRole('heading', { name: 'No tools found' })).toBeVisible();
   await page.getByRole('button', { name: 'Clear search' }).click();
   await expect(page.getByRole('heading', { name: 'Pallet Label Printer' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open tool' })).toHaveCount(4);
+  await expect(page.getByRole('link', { name: 'Open tool' })).toHaveCount(5);
 });
 
 test('picker water reminders persist and clear when watered', async () => {

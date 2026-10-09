@@ -90,7 +90,7 @@ The desktop tests intercept the native spool call while exercising the real prin
 
 ## Python tool ownership
 
-All tools implement their functional logic in Python under `python/tools`. Counter state, pallet input validation, paired sequences, preview data, and print document generation belong to Python. React presents the interface; Electron provides the narrow OS adapter for printer discovery, document rendering and fitting, and native print queue submission. New tools must follow this split.
+Python-backed tools implement their functional logic under `python/tools`. Counter state, pallet input validation, paired sequences, preview data, and print document generation belong to Python. React presents the interface; Electron provides the narrow OS adapter for printer discovery, document rendering and fitting, and native print queue submission. Tools that use the Python backend follow this split; Freight Pictures uses the Electron host for its local HTTP and filesystem service.
 
 ## Branding
 
@@ -100,3 +100,9 @@ The app uses the supplied Schwalbe Supersign artwork with pale blue (#D4EBF8), b
 ## Alignment test
 
 Select a printer in Pallet Label Printer and click Print alignment test to submit one label with an inset border and center cross. No shipment fields are required. Inspect physical margins and clipping; the app does not automatically calibrate the printer.
+
+## Freight Pictures
+
+Freight Pictures receives original-quality phone pictures over the local network while the toolkit is open. Select a parent folder, create shipments using company and shipped date, and scan the shipment QR or master link from iPhone or Android. Confirm one photo per pallet before Upload All. Shipments close after every file is verified on the desktop; Reupload reopens them to add pictures. Desktop and phone shipment selectors use dropdowns.
+
+The Electron host owns the LAN HTTP listener, filesystem writes, checksums, and QR links for this tool. The existing Python-backed counter and printer tools retain their current architecture. See [FREIGHT_PICTURES.md](FREIGHT_PICTURES.md) for network setup and upload behavior.

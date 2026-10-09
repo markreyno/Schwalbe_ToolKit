@@ -1,0 +1,56 @@
+import { test, expect, _electron as electron } from '@playwright/test';
+import { mkdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+test.use({ channel: 'msedge' });
+test('freight mobile upload verifies original files, closes links, reuploads and persists', async ({ browser, request }) => {
+  const profile = path.resolve('.cache/freight-tests', randomUUID());
+  const storage = path.join(profile, 'pictures'); await mkdir(storage, { recursive: true });
+  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)), TOOLKIT_TEST_DATA: profile }; delete env.ELECTRON_RUN_AS_NODE;
+  let app = await electron.launch({ ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }), env });
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }, storage) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [storage] })) as any; }, storage);
+    await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'Freight Pictures', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
+    await expect(page.getByRole('heading', { name: 'Freight Pictures', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
+    await page.getByLabel('Company', { exact: true }).fill('Test Company'); await page.getByLabel('Date shipped').fill('2026-10-08');
+    await expect(page.getByRole('button', { name: 'Create shipment & QR code' })).toHaveCSS('background-color', 'rgb(8, 10, 11)');
+    await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
+    await expect(page.locator('.freight-shipment')).toContainText('Awaiting pictures');
+    await page.screenshot({ path: 'test-results/freight-desktop.png' });
+    let state = await page.evaluate(() => window.toolkit.freight('status'));
+    const local = (url: string) => url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48731');
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await mobile.goto(local(state.masterUrl)); await expect(mobile.getByRole('heading', { name: 'Create shipment' })).toBeVisible();
+    await mobile.getByLabel('Company', { exact: true }).fill('Phone Company'); await mobile.getByLabel('Date shipped').fill('2026-10-09'); await mobile.getByRole('button', { name: 'Create shipment', exact: true }).click();
+    await expect(mobile.locator('#title')).toContainText('Phone Company');
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=', 'base64');
+    await mobile.locator('#files').setInputFiles([{ name: 'pallet.png', mimeType: 'image/png', buffer: bytes }, { name: 'pallet2.png', mimeType: 'image/png', buffer: bytes }]);
+    await mobile.getByLabel('Pallet amount', { exact: true }).fill('1'); await mobile.locator('#confirm').check(); await expect(mobile.getByRole('button', { name: 'Upload All', exact: true })).toBeDisabled();
+    await mobile.getByLabel('Pallet amount', { exact: true }).fill('2'); await expect(mobile.getByRole('button', { name: 'Upload All', exact: true })).toBeEnabled();
+    await mobile.screenshot({ path: 'test-results/freight-phone.png' });
+    const oldLink = mobile.url(); await mobile.getByRole('button', { name: 'Upload All', exact: true }).click(); await expect(mobile.locator('#message')).toContainText('2 pallet pictures verified');
+    state = await page.evaluate(() => window.toolkit.freight('status')); const shipment = state.shipments.find(s => s.company === 'Phone Company')!;
+    expect(shipment.closed).toBe(true); expect(shipment.pictures).toBe(2);
+    const fs = await import('node:fs/promises'); const files = await fs.readdir(shipment.folder); expect(files).toHaveLength(2); for (const f of files) expect(await readFile(path.join(shipment.folder, f))).toEqual(bytes);
+    const denied = await request.post(local(shipment.url).replace('/?','/batch?'), { data: { pallets: 1, files: [] } }); expect(denied.status()).toBe(400);
+    await page.evaluate(id => window.toolkit.freight('reupload', { id }), shipment.id);
+    state = await page.evaluate(() => window.toolkit.freight('status')); const reopened = state.shipments.find(s => s.id === shipment.id)!;
+    expect(reopened.url).not.toBe(shipment.url); await mobile.goto(oldLink); await expect(mobile.locator('body')).toContainText('Invalid Freight Pictures link');
+    await mobile.goto(local(reopened.url)); await expect(mobile.getByRole('button', { name: 'Reupload All' })).toBeVisible();
+    await mobile.locator('#files').setInputFiles({ name: 'extra.png', mimeType: 'image/png', buffer: bytes }); await mobile.getByLabel('Pallet amount', { exact: true }).fill('1'); await mobile.locator('#confirm').check(); await mobile.getByRole('button', { name: 'Reupload All' }).click(); await expect(mobile.locator('#message')).toContainText('1 pallet pictures verified');
+    expect(await fs.readdir(shipment.folder)).toHaveLength(3);
+    // Wrong checksums cannot close a shipment; retry is idempotent and a second uploader is blocked.
+    const open = state.shipments.find(s => s.company === 'Test Company')!; const api = (route: string) => local(open.url).replace('/?', route + '&');
+    const manifest = { pallets: 1, files: [{ name: 'pallet.png', size: bytes.length, hash: createHash('sha256').update(bytes).digest('hex') }] };
+    const batch = await (await request.post(api('/batch?'), { data: manifest })).json();
+    expect((await request.post(api('/batch?'), { data: manifest })).status()).toBe(400);
+    expect((await request.post(api('/finish?batch=' + batch.id), {})).status()).toBe(400);
+    expect((await request.post(api('/file?batch=' + batch.id + '&index=0'), { data: Buffer.alloc(bytes.length) })).status()).toBe(400);
+    for (let i=0;i<2;i++) expect((await request.post(api('/file?batch=' + batch.id + '&index=0'), { data: bytes })).status()).toBe(200);
+    expect((await request.post(api('/finish?batch=' + batch.id), {})).status()).toBe(200); expect(await fs.readdir(open.folder)).toHaveLength(1);
+    await mobile.close(); await app.close(); app = await electron.launch({ ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }), env });
+    const second = await app.firstWindow(); const persisted = await second.evaluate(() => window.toolkit.freight('status')); expect(persisted.shipments.find(s => s.id === shipment.id)?.closed).toBe(true); expect(persisted.masterUrl).toBe(state.masterUrl);
+  } finally { await app.close(); }
+});

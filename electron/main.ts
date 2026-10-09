@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
+import { registerFreight } from './freight';
 import { PythonBridge } from './pythonBridge';
 import { registerPalletPrinter } from './palletPrinter';
 import { registerUpdates } from './updates';
@@ -25,10 +26,10 @@ function createWindow() {
   mainWindow.webContents.on('did-start-loading', () => bridge.stop());
   mainWindow.on('closed', () => { mainWindow = null; bridge.stop(); });
   if (developmentURL) void mainWindow.loadURL(developmentURL);
-  else void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+  else void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), process.argv.includes('--freight-pictures') ? { hash: '/tools/freight-pictures' } : {});
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setAppUserModelId('com.schwalbe.toolkit');
   const command = app.isPackaged ? path.join(process.resourcesPath, 'python', 'toolkit-backend.exe') : (process.env.PYTHON_PATH || 'python');
   bridge = new PythonBridge(command, app.isPackaged ? [] : ['-u', path.join(__dirname, '../python/main.py')], () => {
@@ -42,6 +43,7 @@ app.whenReady().then(() => {
   });
   registerPalletPrinter(() => mainWindow, bridge);
   registerUpdates(() => mainWindow);
+  await registerFreight(() => mainWindow);
   createWindow();
   app.on('activate', () => { if (!mainWindow) createWindow(); });
 });

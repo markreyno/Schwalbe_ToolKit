@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ToolkitAPI } from '../shared/protocol';
 const api: ToolkitAPI = {
+  freight: (action, data) => ipcRenderer.invoke('toolkit:freight', action, data),
   updates: action => ipcRenderer.invoke('toolkit:updates', action),
   onUpdateState: callback => {
     const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state);
