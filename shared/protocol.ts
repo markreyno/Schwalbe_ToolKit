@@ -1,7 +1,7 @@
 export type CounterSession = { sessionId: string; value: number };
 export type Operation = 'counter.open' | 'counter.increment' | 'counter.close' | 'pallet.prepare' | 'pallet.preview' | 'pallet.alignment';
 export interface ToolkitAPI {
-  freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open', data?: { company?: string; date?: string; id?: string }): Promise<FreightState>;
+  freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open' | 'setTailscale', data?: { company?: string; date?: string; id?: string; enabled?: boolean }): Promise<FreightState>;
   updates(action: 'status' | 'check' | 'download' | 'install'): Promise<UpdateState>;
   onUpdateState(callback: (state: UpdateState) => void): () => void;
   previewPalletLabels(job: PalletPrintJob): Promise<PalletPreview>;
@@ -26,4 +26,4 @@ declare global { interface Window { toolkit: ToolkitAPI } }
 
 export type PalletPreview = { company: string; labels: string[]; labelCount: number; lastLabel: string };
 
-export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; url: string; qr: string }[] };
+export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; url: string; qr: string }[] };
