@@ -8,6 +8,19 @@ import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import { mobilePage } from './freightMobile';
+
+function isPrivateIP(ip: string): boolean {
+  if (ip === '::1') return true;
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
+  if (parts[0] === 127) return true;
+  if (parts[0] === 10) return true;
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  if (parts[0] === 169 && parts[1] === 254) return true;
+  return false;
+}
+
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number };
 type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; expires: number };
@@ -63,12 +76,23 @@ export class FreightServer {
   }
   private async body(req: http.IncomingMessage, max: number) { const chunks: Buffer[] = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > max) throw new Error('Upload exceeds the allowed size.'); chunks.push(chunk); } return Buffer.concat(chunks); }
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+    const clientIP = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    if (clientIP && !isPrivateIP(clientIP)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Access denied. Freight Pictures only accepts connections from private networks (RFC1918). Your IP: ' + clientIP);
+      return;
+    }
     const url = new URL(req.url || '/', 'http://local');
     const key = url.searchParams.get('key');
     const shipment = this.shipments.find(s => s.token === key);
     const master = key === this.master;
     if (!master && !shipment) { res.writeHead(403); res.end('Invalid Freight Pictures link.'); return; }
-    if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) throw new Error('Invalid request origin.');
+    if (req.headers.origin) {
+      const originHost = new URL(req.headers.origin).host;
+      if (originHost !== req.headers.host) {
+        throw new Error('Invalid request origin. Origin host does not match request host.');
+      }
+    }
     const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(mobilePage); return; }
     if (req.method === 'GET' && url.pathname === '/state') { json({ master, configured: !!this.root, shipment: shipment && { company: shipment.company, date: shipment.date, closed: shipment.closed, reupload: shipment.reupload }, shipments: master ? this.shipments.filter(s => !s.closed).map(s => ({ company: s.company, date: s.date, key: s.token })) : [] }); return; }
