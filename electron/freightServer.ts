@@ -11,6 +11,7 @@ import { mobilePage } from './freightMobile';
 
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
+  if (ip.startsWith('fd7a:115c:a1e0:')) return true;
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
   if (parts[0] === 127) return true;
@@ -18,7 +19,23 @@ function isPrivateIP(ip: string): boolean {
   if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
   if (parts[0] === 192 && parts[1] === 168) return true;
   if (parts[0] === 169 && parts[1] === 254) return true;
+  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
   return false;
+}
+
+async function detectTailscale(): Promise<{ address?: string; hostname?: string; error?: string }> {
+  try {
+    const { stdout } = await promisify(execFile)('tailscale', ['status', '--json'], { timeout: 3000 });
+    const status = JSON.parse(stdout);
+    if (!status.Self) return { error: 'Tailscale is not connected' };
+    const selfAddresses = status.Self.TailscaleIPs || [];
+    const ipv4 = selfAddresses.find((ip: string) => ip.includes('.'));
+    const hostname = status.Self.DNSName ? status.Self.DNSName.replace(/\.$/, '') : undefined;
+    return { address: ipv4, hostname };
+  } catch (e: any) {
+    if (e.code === 'ENOENT') return { error: 'Tailscale is not installed' };
+    return { error: 'Tailscale detection failed: ' + e.message };
+  }
 }
 
 const token = () => randomBytes(24).toString('hex');
@@ -32,6 +49,7 @@ export class FreightServer {
   private batch?: Batch;
   private port = 0;
   private preferredAddress = '';
+  private useTailscale = false;
   private error = '';
   private writing = false;
   private persistence: Promise<void> = Promise.resolve();
@@ -44,13 +62,13 @@ export class FreightServer {
         if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) this.preferredAddress = address;
       } catch { /* The address selector remains available if Windows route detection fails. */ }
     }
-    try { const data = JSON.parse(await fs.readFile(this.settings, 'utf8')); this.root = data.root; this.master = data.master; this.shipments = data.shipments; } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read Freight Pictures settings.'; }
+    try { const data = JSON.parse(await fs.readFile(this.settings, 'utf8')); this.root = data.root; this.master = data.master; this.shipments = data.shipments; this.useTailscale = data.useTailscale || false; } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read Freight Pictures settings.'; }
     this.server = http.createServer((req, res) => { void this.handle(req, res).catch(e => { if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); } else res.end(); }); });
     await new Promise<void>(resolve => { this.server!.once('error', e => { this.error = e.message; resolve(); }); this.server!.listen(48731, '0.0.0.0', () => { this.port = 48731; resolve(); }); });
   }
   stop() { this.server?.close(); this.server?.closeAllConnections(); }
   private persist() {
-    const snapshot = JSON.stringify({ root: this.root, master: this.master, shipments: this.shipments });
+    const snapshot = JSON.stringify({ root: this.root, master: this.master, shipments: this.shipments, useTailscale: this.useTailscale });
     const next = this.persistence.catch(() => {}).then(async () => { await fs.mkdir(path.dirname(this.settings), { recursive: true }); const temp = this.settings + '.tmp'; await fs.writeFile(temp, snapshot); await fs.rename(temp, this.settings); });
     this.persistence = next;
     return next;
@@ -66,13 +84,22 @@ export class FreightServer {
     this.shipments.unshift(shipment); await this.persist(); return shipment;
   }
   async reopen(id: string) { const s = this.shipments.find(s => s.id === id); if (!s || !s.closed) throw new Error('Select a completed shipment.'); s.closed = false; s.reupload = true; s.token = token(); await this.persist(); }
+  async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); }
   folder(id: string) { const s = this.shipments.find(s => s.id === id); if (!s) throw new Error('Shipment not found.'); return s.folder; }
   async status() {
-    const addresses = Object.values(os.networkInterfaces()).flat().filter(a => a && a.family === 'IPv4' && !a.internal).map(a => a!.address).sort((a, b) => Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(b)) - Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a)));
-    addresses.sort((a, b) => Number(b === this.preferredAddress) - Number(a === this.preferredAddress));
-    const urls = addresses.map(a => `http://${a}:${this.port}`);
+    const tailscale = await detectTailscale();
+    let urls: string[];
+    if (this.useTailscale && tailscale.hostname) {
+      urls = [`http://${tailscale.hostname}:${this.port}`];
+    } else if (this.useTailscale && tailscale.address) {
+      urls = [`http://${tailscale.address}:${this.port}`];
+    } else {
+      const addresses = Object.values(os.networkInterfaces()).flat().filter(a => a && a.family === 'IPv4' && !a.internal).map(a => a!.address).sort((a, b) => Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(b)) - Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a)));
+      addresses.sort((a, b) => Number(b === this.preferredAddress) - Number(a === this.preferredAddress));
+      urls = addresses.map(a => `http://${a}:${this.port}`);
+    }
     const base = urls[0] || `http://127.0.0.1:${this.port}`;
-    return { root: this.root, running: !!this.port, error: this.error, addresses: urls, masterUrl: `${base}/?key=${this.master}`, masterQr: await QRCode.toDataURL(`${base}/?key=${this.master}`), shipments: await Promise.all(this.shipments.map(async s => ({ ...s, url: `${base}/?key=${s.token}`, qr: s.closed ? '' : await QRCode.toDataURL(`${base}/?key=${s.token}`) }))) };
+    return { root: this.root, running: !!this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, masterUrl: `${base}/?key=${this.master}`, masterQr: await QRCode.toDataURL(`${base}/?key=${this.master}`), shipments: await Promise.all(this.shipments.map(async s => ({ ...s, url: `${base}/?key=${s.token}`, qr: s.closed ? '' : await QRCode.toDataURL(`${base}/?key=${s.token}`) }))) };
   }
   private async body(req: http.IncomingMessage, max: number) { const chunks: Buffer[] = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > max) throw new Error('Upload exceeds the allowed size.'); chunks.push(chunk); } return Buffer.concat(chunks); }
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {

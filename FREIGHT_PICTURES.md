@@ -1,6 +1,17 @@
 # Freight Pictures
 
-Open Freight Pictures in the toolkit and choose a parent storage folder. Keep the toolkit open and the desktop awake. The server uses TCP port 48731 and accepts connections from any device on private networks (RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16). This includes devices on adjacent subnets or VLANs within your site LAN. Allow the toolkit on your private network in Windows Firewall if needed; no router port forwarding is required.
+Open Freight Pictures in the toolkit and choose a parent storage folder. Keep the toolkit open and the desktop awake. The server uses TCP port 48731 and accepts connections from any device on private networks (RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) or Tailscale (100.64.0.0/10). This includes devices on adjacent subnets or VLANs within your site LAN. Allow the toolkit on your private network in Windows Firewall if needed; no router port forwarding is required.
+
+**Network modes:**
+- **Local network:** Uses your LAN IP addresses (default). Works across subnets and VLANs on the same site as long as routing is configured.
+- **Tailscale:** Uses your Tailscale VPN address. Works from anywhere on your tailnet, including over the internet, without exposing the service publicly.
+
+**Tailscale setup:**
+1. Install Tailscale on the PC running the toolkit: https://tailscale.com/download
+2. Install Tailscale on your phone (iOS or Android)
+3. Sign in to the same Tailscale account (tailnet) on both devices
+4. In the toolkit, switch Network mode to "Tailscale"
+5. The QR code and link will use your Tailscale address (100.x.x.x or MagicDNS hostname)
 
 Create a shipment using company and date shipped. Shipments are stored as Company_YYYY-MM-DD; duplicate names receive a numeric suffix. The permanent master QR/link lets a phone create or select an open shipment. Use the network address selector if the computer has multiple adapters or if devices on other subnets cannot reach the default address.
 

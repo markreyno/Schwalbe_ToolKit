@@ -11,6 +11,7 @@ export async function registerFreight(window: () => BrowserWindow | null) {
     else if (action === 'create') await service.create(data?.company, data?.date);
     else if (action === 'reupload') await service.reopen(data?.id);
     else if (action === 'open') { const error = await shell.openPath(service.folder(data?.id)); if (error) throw new Error(error); }
+    else if (action === 'setTailscale') await service.setTailscaleMode(data?.enabled);
     else if (action !== 'status') throw new Error('Unsupported action.');
     return service.status();
   });
