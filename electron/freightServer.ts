@@ -1,3 +1,4 @@
+import { MAX_FREIGHT_PICTURES, validateFreightImage } from './freightValidation';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import http from 'node:http';
@@ -9,7 +10,7 @@ import QRCode from 'qrcode';
 import { mobilePage } from './freightMobile';
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number };
-type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash: string; saved?: string }[]; expires: number };
+type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; expires: number };
 export class FreightServer {
   private server?: http.Server;
   private root = '';
@@ -76,8 +77,8 @@ export class FreightServer {
     if (req.method === 'POST' && url.pathname === '/batch') {
       if (this.batch && this.batch.expires > Date.now()) throw new Error('An upload is already active. Retry the current batch or wait 10 minutes.');
       const data = JSON.parse((await this.body(req, 100000)).toString());
-      if (!Array.isArray(data.files) || data.files.length < 1 || data.files.length > 300 || data.pallets !== data.files.length) throw new Error('Confirm one picture per pallet.');
-      for (const f of data.files) if (typeof f.name !== 'string' || !/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(f.name) || !Number.isInteger(f.size) || f.size < 1 || f.size > 100 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(f.hash)) throw new Error('Choose image files up to 100 MB each.');
+      if (!Array.isArray(data.files) || data.files.length < 1 || data.files.length > MAX_FREIGHT_PICTURES || data.pallets !== data.files.length) throw new Error('Select 1 to 26 pictures and confirm one picture per pallet.');
+      for (const f of data.files) if (typeof f.name !== 'string' || !/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(f.name) || !Number.isInteger(f.size) || f.size < 1 || f.size > 100 * 1024 * 1024 || (f.hash !== undefined && !/^[a-f0-9]{64}$/.test(f.hash))) throw new Error('Choose image files up to 100 MB each.');
       this.batch = { id: token(), shipment, files: data.files, expires: Date.now() + 600000 }; json({ id: this.batch.id }); return;
     }
     const batch = this.batch;
@@ -88,7 +89,11 @@ export class FreightServer {
       const index = Number(url.searchParams.get('index')); const f = batch.files[index]; if (!Number.isInteger(index) || !f) throw new Error('Invalid picture.');
       this.writing = true;
       try {
-        const bytes = await this.body(req, f.size); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Picture transfer was incomplete. Retry.');
+        const expectedHash = f.hash ?? req.headers['x-picture-sha256'];
+        if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Picture checksum is required. Retry.');
+        const bytes = await this.body(req, f.size); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
+        try { validateFreightImage(bytes, f.name); } catch (e) { this.batch = undefined; throw e; }
+        f.hash = expectedHash;
         if (!f.saved) { const target = path.join(shipment.folder, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${path.extname(f.name).toLowerCase()}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
         json({ saved: true });
       } finally { this.writing = false; } return;
