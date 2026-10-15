@@ -56,7 +56,11 @@ footer { font-size: 8px; letter-spacing: 1.3px; color: #9aa4b1; border-top: 1px 
 
 <section id="home">
 <h2>New Pallet</h2>
-<button id="new-pallet">Start New Pallet</button>
+<div class="capture-actions">
+<button id="new-pallet">Record Video</button>
+<button id="upload-video-btn" class="secondary">Upload Existing Video</button>
+</div>
+<input type="file" id="video-file-input" accept="video/*" hidden>
 <div id="queue"></div>
 <h2 style="margin-top: 30px">Recent Pallets</h2>
 <div id="pallets"></div>

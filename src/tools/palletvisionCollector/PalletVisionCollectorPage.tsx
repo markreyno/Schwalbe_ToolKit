@@ -11,6 +11,8 @@ export function PalletVisionCollectorPage() {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ heightInches: string; widthInches: string; lengthInches: string; device: string; notes: string; annotationsReviewed: boolean }>({ heightInches: '', widthInches: '', lengthInches: '', device: '', notes: '', annotationsReviewed: false });
+  const [importing, setImporting] = useState(false);
+  const [importForm, setImportForm] = useState<{ heightInches: string; widthInches: string; lengthInches: string; notes: string; referenceId: string; videoPath: string }>({ heightInches: '', widthInches: '40', lengthInches: '48', notes: '', referenceId: '', videoPath: '' });
 
   async function action(action: Parameters<typeof window.toolkit.palletvision>[0], data?: Parameters<typeof window.toolkit.palletvision>[1]) {
     setBusy(true); setError('');
@@ -64,6 +66,49 @@ export function PalletVisionCollectorPage() {
     setEditing(null);
   }
 
+  async function startImport() {
+    setImporting(true);
+    setImportForm({ heightInches: '', widthInches: '40', lengthInches: '48', notes: '', referenceId: '', videoPath: '' });
+    setError('');
+  }
+
+  async function selectVideoFile() {
+    try {
+      const result = await window.toolkit.palletvision('selectVideo', {});
+      if (result.videoPath) {
+        setImportForm({ ...importForm, videoPath: result.videoPath });
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function saveImport() {
+    if (!importForm.videoPath) {
+      setError('Please select a video file first.');
+      return;
+    }
+    
+    const height = parseFloat(importForm.heightInches);
+    const width = parseFloat(importForm.widthInches);
+    const length = parseFloat(importForm.lengthInches);
+    
+    if (!height || height <= 0) { setError('Height must be a positive number.'); return; }
+    if (!width || width <= 0) { setError('Width must be a positive number.'); return; }
+    if (!length || length <= 0) { setError('Length must be a positive number.'); return; }
+    
+    await action('import', {
+      videoPath: importForm.videoPath,
+      heightInches: height,
+      widthInches: width,
+      lengthInches: length,
+      notes: importForm.notes,
+      referenceId: importForm.referenceId
+    });
+    
+    setImporting(false);
+  }
+
   return <>
     <Link to="/" className="back-link"><ArrowLeft size={16}/> All tools</Link>
     <header className="page-heading">
@@ -80,7 +125,10 @@ export function PalletVisionCollectorPage() {
         <section className="freight-panel">
           <h2>Desktop storage</h2>
           <p>{state?.root || 'Choose a folder to store pallet data.'}</p>
-          <button disabled={busy} onClick={() => void action('choose')}><FolderOpen size={16}/> Choose folder</button>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button disabled={busy} onClick={() => void action('choose')} style={{ flex: 1 }}><FolderOpen size={16}/> Choose folder</button>
+            <button disabled={busy || !state?.root} onClick={() => void startImport()} style={{ flex: 1, background: '#0d7aa3' }}><Video size={16}/> Import video file</button>
+          </div>
           <p className="freight-muted">{state?.running ? 'Upload server is running on port 48732.' : 'Upload server is unavailable.'} Keep the toolkit open.</p>
           {state?.error && <p role="alert">{state.error}</p>}
         </section>
@@ -145,6 +193,52 @@ export function PalletVisionCollectorPage() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button disabled={busy} onClick={() => void saveEdit()}>Save changes</button>
             <button disabled={busy} style={{ background: '#d4ebf8', color: '#080a0b' }} onClick={() => setEditing(null)}>Cancel</button>
+          </div>
+        </section>}
+        
+        {importing && <section className="freight-panel" style={{ background: '#f5f8fa', border: '2px solid #0d7aa3' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h2 style={{ margin: 0 }}>Import Video File</h2>
+            <button style={{ width: 'auto', padding: '6px', background: 'transparent', border: 'none', color: '#7b8694' }} onClick={() => setImporting(false)}><X size={20}/></button>
+          </div>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ fontSize: '12px' }}>
+              Video file *
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <input type="text" readOnly value={importForm.videoPath ? importForm.videoPath.split(/[\\/]/).pop() : 'No file selected'} style={{ flex: 1 }} />
+                <button type="button" onClick={() => void selectVideoFile()} style={{ width: 'auto', padding: '0 16px', margin: 0 }}>Browse</button>
+              </div>
+            </label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <label style={{ fontSize: '12px' }}>
+              Height (inches) *
+              <input type="number" step="0.1" min="0.1" value={importForm.heightInches} onChange={e => setImportForm({ ...importForm, heightInches: e.target.value })} required />
+            </label>
+            <label style={{ fontSize: '12px' }}>
+              Width (inches) *
+              <input type="number" step="0.1" min="0.1" value={importForm.widthInches} onChange={e => setImportForm({ ...importForm, widthInches: e.target.value })} required />
+            </label>
+            <label style={{ fontSize: '12px' }}>
+              Length (inches) *
+              <input type="number" step="0.1" min="0.1" value={importForm.lengthInches} onChange={e => setImportForm({ ...importForm, lengthInches: e.target.value })} required />
+            </label>
+          </div>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ fontSize: '12px' }}>
+              Reference/Barcode ID
+              <input type="text" value={importForm.referenceId} onChange={e => setImportForm({ ...importForm, referenceId: e.target.value })} placeholder="Optional reference ID" />
+            </label>
+          </div>
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ fontSize: '12px' }}>
+              Notes
+              <textarea value={importForm.notes} onChange={e => setImportForm({ ...importForm, notes: e.target.value })} placeholder="Optional notes..." />
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button disabled={busy} onClick={() => void saveImport()}>Import & Process</button>
+            <button disabled={busy} style={{ background: '#d4ebf8', color: '#080a0b' }} onClick={() => setImporting(false)}>Cancel</button>
           </div>
         </section>}
       </div>

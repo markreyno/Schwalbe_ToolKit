@@ -38,6 +38,7 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     expect(state.pallets).toHaveLength(0);
 
     const local = (url: string) => url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48732');
+    const apiUrl = (path: string) => new URL(path, local(state.qrUrl)).toString();
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await mobile.goto(local(state.qrUrl));
 
@@ -62,7 +63,7 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     formData.append('capturedAt', new Date().toISOString());
     formData.append('video', new Blob([videoBuffer], { type: 'video/webm' }), 'test.webm');
 
-    const uploadResp = await fetch(local(state.qrUrl) + '/api/pallets/upload', {
+    const uploadResp = await fetch(apiUrl('/api/pallets/upload'), {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + deviceToken },
       body: formData
@@ -118,7 +119,7 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
       expect(frames.every(f => f.endsWith('.jpg'))).toBe(true);
     }
 
-    const retryResp = await fetch(local(state.qrUrl) + '/api/pallets/upload', {
+    const retryResp = await fetch(apiUrl('/api/pallets/upload'), {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + deviceToken },
       body: formData
@@ -131,7 +132,7 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     state = await page.evaluate(() => window.toolkit.palletvision('status'));
     expect(state.pallets).toHaveLength(1);
 
-    const healthResp = await fetch(local(state.qrUrl) + '/api/health', {
+    const healthResp = await fetch(apiUrl('/api/health'), {
       headers: { 'Authorization': 'Bearer ' + deviceToken }
     });
     expect(healthResp.ok).toBe(true);
@@ -158,5 +159,164 @@ test('palletvision validates dimensions', async () => {
   for (const tc of testCases) {
     const isValid = tc.height > 0 && tc.width > 0 && tc.length > 0;
     expect(isValid).toBe(!tc.shouldFail);
+  }
+});
+
+test('palletvision mobile upload existing video', async ({ browser }) => {
+  const profile = path.resolve('.cache/palletvision-tests', randomUUID());
+  const storage = path.join(profile, 'data');
+  await mkdir(storage, { recursive: true });
+
+  const env: Record<string, string> = {
+    ...Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)),
+    TOOLKIT_TEST_DATA: profile
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  let app = await electron.launch({
+    ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }),
+    env
+  });
+
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }, storage) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [storage] })) as any;
+    }, storage);
+
+    await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
+    await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
+
+    let state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    const local = (url: string) => url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48732');
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await mobile.goto(local(state.qrUrl));
+
+    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair'));
+    await expect(mobile.getByRole('heading', { name: 'PalletVision Data Collector' })).toBeVisible();
+    const pairResp = await pairReq;
+    const pairData = await pairResp.json();
+    const deviceToken = pairData.deviceToken;
+
+    const testVideoPath = path.join(__dirname, 'fixtures', 'test-pallet.webm');
+    const videoBuffer = await readFile(testVideoPath);
+
+    await mobile.getByRole('button', { name: 'Upload Existing Video' }).click();
+    const fileInput = mobile.locator('#video-file-input');
+    await fileInput.setInputFiles({ name: 'test-video.webm', mimeType: 'video/webm', buffer: videoBuffer });
+
+    await expect(mobile.locator('#playback')).toBeVisible({ timeout: 3000 });
+    await expect(mobile.getByRole('button', { name: 'Continue' })).toBeVisible();
+    
+    await mobile.getByRole('button', { name: 'Continue' }).click();
+    await mobile.locator('#height').fill('72');
+    await mobile.locator('#width').fill('40');
+    await mobile.locator('#length').fill('48');
+    await mobile.locator('#notes').fill('Uploaded from gallery');
+    
+    await mobile.getByRole('button', { name: 'Save & Upload' }).click();
+
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    expect(state.pallets).toHaveLength(1);
+    const pallet = state.pallets[0];
+    expect(pallet.heightInches).toBe(72);
+    expect(pallet.widthInches).toBe(40);
+    expect(pallet.lengthInches).toBe(48);
+    expect(pallet.notes).toBe('Uploaded from gallery');
+
+    await mobile.close();
+  } finally {
+    await app.close();
+  }
+});
+
+test('palletvision desktop import video', async () => {
+  const profile = path.resolve('.cache/palletvision-tests', randomUUID());
+  const storage = path.join(profile, 'data');
+  await mkdir(storage, { recursive: true });
+
+  const testVideoPath = path.join(__dirname, 'fixtures', 'test-pallet.webm');
+
+  const env: Record<string, string> = {
+    ...Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)),
+    TOOLKIT_TEST_DATA: profile
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  let app = await electron.launch({
+    ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }),
+    env
+  });
+
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }: any, args: any) => {
+      let callCount = 0;
+      dialog.showOpenDialog = (async (win: any, opts: any) => {
+        callCount++;
+        if (callCount === 1) {
+          return { canceled: false, filePaths: [args.storage] };
+        } else {
+          return { canceled: false, filePaths: [args.testVideoPath] };
+        }
+      }) as any;
+    }, { storage, testVideoPath });
+
+    await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
+    await expect(page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
+
+    let state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    expect(state.root).toBe(storage);
+    expect(state.pallets).toHaveLength(0);
+
+    await page.getByRole('button', { name: 'Import video file' }).click();
+    await expect(page.getByRole('heading', { name: 'Import Video File' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Browse' }).click();
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    await page.locator('input[type="number"]').first().fill('68');
+    await page.locator('input[type="number"]').nth(1).fill('42');
+    await page.locator('input[type="number"]').nth(2).fill('50');
+    await page.locator('textarea').fill('Desktop imported pallet');
+
+    await page.getByRole('button', { name: 'Import & Process' }).click();
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    expect(state.pallets).toHaveLength(1);
+    const pallet = state.pallets[0];
+    expect(pallet.heightInches).toBe(68);
+    expect(pallet.widthInches).toBe(42);
+    expect(pallet.lengthInches).toBe(50);
+    expect(pallet.notes).toBe('Desktop imported pallet');
+    expect(pallet.captureId).toContain('cap_desktop_');
+
+    const fs = await import('node:fs/promises');
+    const palletFolder = path.join(storage, pallet.id);
+    const files = await fs.readdir(palletFolder);
+    expect(files).toContain('video.webm');
+    expect(files).toContain('metadata.json');
+    expect(files).toContain('frames');
+
+    const metadata = JSON.parse(await fs.readFile(path.join(palletFolder, 'metadata.json'), 'utf8'));
+    expect(metadata.device).toBe('Desktop');
+    expect(metadata.height_inches).toBe(68);
+    expect(metadata.width_inches).toBe(42);
+    expect(metadata.length_inches).toBe(50);
+
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    const updatedPallet = state.pallets[0];
+    if (updatedPallet.processingStatus === 'complete') {
+      expect(updatedPallet.framesExtracted).toBeGreaterThan(0);
+    }
+  } finally {
+    await app.close();
   }
 });

@@ -127,7 +127,7 @@ export class PalletVisionServer {
       pallet.widthInches = updates.widthInches;
     }
     if (updates.lengthInches !== undefined) {
-      if (updates.lengthInches <= 0) throw new Error('Length must be positive.');
+      if (updates.lengthInches <= 0) throw new Error('Length must be a positive.');
       pallet.lengthInches = updates.lengthInches;
     }
     if (updates.notes !== undefined) pallet.notes = updates.notes;
@@ -144,6 +144,90 @@ export class PalletVisionServer {
     
     await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
     await this.persist();
+  }
+
+  async importVideo(videoPath: string, data: { heightInches: number; widthInches: number; lengthInches: number; notes?: string; referenceId?: string }) {
+    if (this.writing) throw new Error('Another pallet is being processed. Wait and retry.');
+    if (!this.root) throw new Error('Choose a storage folder first.');
+    
+    await fs.access(videoPath);
+    
+    const ext = path.extname(videoPath).toLowerCase().slice(1);
+    if (!['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) {
+      throw new Error('Unsupported video format. Please use MP4, WebM, MOV, AVI, or MKV.');
+    }
+    
+    const stat = await fs.stat(videoPath);
+    if (stat.size > 500 * 1024 * 1024) {
+      throw new Error('Video file is too large (max 500MB).');
+    }
+    if (stat.size === 0) {
+      throw new Error('Video file is empty.');
+    }
+    
+    const { heightInches, widthInches, lengthInches, notes, referenceId } = data;
+    
+    if (!heightInches || heightInches <= 0) throw new Error('Invalid height.');
+    if (!widthInches || widthInches <= 0) throw new Error('Invalid width.');
+    if (!lengthInches || lengthInches <= 0) throw new Error('Invalid length.');
+    
+    this.writing = true;
+    try {
+      const captureId = `cap_desktop_${Date.now()}_${randomBytes(3).toString('hex')}`;
+      const palletId = `pallet_${String(this.pallets.length + 1).padStart(4, '0')}`;
+      const palletFolder = path.join(this.root, palletId);
+      
+      await fs.mkdir(palletFolder, { recursive: true });
+      await fs.mkdir(path.join(palletFolder, 'frames'), { recursive: true });
+      
+      const videoExt = ext === 'mov' || ext === 'avi' || ext === 'mkv' ? 'mp4' : ext;
+      const finalVideoPath = path.join(palletFolder, `video.${videoExt}`);
+      await fs.copyFile(videoPath, finalVideoPath);
+      
+      const pallet: Pallet = {
+        id: palletId,
+        captureId,
+        heightInches,
+        widthInches,
+        lengthInches,
+        notes,
+        referenceId,
+        capturedAt: new Date().toISOString(),
+        deviceToken: 'desktop',
+        folder: palletFolder,
+        processingStatus: 'pending',
+        framesExtracted: 0
+      };
+      
+      const metadata = {
+        pallet_id: palletId,
+        height_inches: heightInches,
+        width_inches: widthInches,
+        length_inches: lengthInches,
+        device: 'Desktop',
+        frames_extracted: 0,
+        annotations_reviewed: false,
+        schema_version: 1,
+        capture_id: captureId,
+        captured_at: pallet.capturedAt,
+        height_includes_base: true,
+        notes,
+        reference_id: referenceId,
+        video_file: `video.${videoExt}`,
+        device_token: 'desktop',
+        annotation_status: 'unlabeled',
+        processing_status: 'pending'
+      };
+      
+      await fs.writeFile(path.join(palletFolder, 'metadata.json'), JSON.stringify(metadata, null, 2));
+      
+      this.pallets.unshift(pallet);
+      await this.persist();
+      
+      void this.extractFrames(pallet);
+    } finally {
+      this.writing = false;
+    }
   }
 
   async status() {
@@ -231,7 +315,8 @@ export class PalletVisionServer {
             return;
           }
           
-          const tempPath = path.join(os.tmpdir(), `pallet-upload-${Date.now()}.webm`);
+          const ext = info.filename?.endsWith('.mp4') ? 'mp4' : 'webm';
+          const tempPath = path.join(os.tmpdir(), `pallet-upload-${Date.now()}.${ext}`);
           videoPath = tempPath;
           const writeStream = createWriteStream(tempPath);
           
@@ -240,6 +325,10 @@ export class PalletVisionServer {
           });
           
           file.pipe(writeStream);
+          
+          writeStream.on('error', (err) => {
+            file.resume();
+          });
         });
 
         await new Promise((resolve, reject) => {
@@ -272,8 +361,11 @@ export class PalletVisionServer {
         await fs.mkdir(palletFolder, { recursive: true });
         await fs.mkdir(path.join(palletFolder, 'frames'), { recursive: true });
         
-        const finalVideoPath = path.join(palletFolder, 'video.webm');
-        await fs.rename(videoPath, finalVideoPath);
+        if (!videoPath) throw new Error('Missing video data.');
+        
+        const videoExt = (videoPath as string).endsWith('.mp4') ? 'mp4' : 'webm';
+        const finalVideoPath = path.join(palletFolder, `video.${videoExt}`);
+        await fs.rename(videoPath as string, finalVideoPath);
         
         const pallet: Pallet = {
           id: palletId,
@@ -308,7 +400,7 @@ export class PalletVisionServer {
           height_includes_base: true,
           notes,
           reference_id: referenceId,
-          video_file: 'video.webm',
+          video_file: `video.${videoExt}`,
           device_token: deviceToken.slice(0, 8),
           annotation_status: 'unlabeled',
           processing_status: 'pending'
@@ -342,7 +434,10 @@ export class PalletVisionServer {
       pallet.processingStatus = 'extracting';
       await this.persist();
       
-      const videoPath = path.join(pallet.folder, 'video.webm');
+      const metadataPath = path.join(pallet.folder, 'metadata.json');
+      const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+      const videoFile = metadata.video_file || 'video.webm';
+      const videoPath = path.join(pallet.folder, videoFile);
       const framesDir = path.join(pallet.folder, 'frames');
       
       const targetFrames = 15;
@@ -361,8 +456,6 @@ export class PalletVisionServer {
       pallet.framesExtracted = frames.length;
       pallet.processingStatus = 'complete';
       
-      const metadataPath = path.join(pallet.folder, 'metadata.json');
-      const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
       metadata.frames_extracted = frames.length;
       metadata.processing_status = 'complete';
       await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));

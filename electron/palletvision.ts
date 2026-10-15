@@ -14,6 +14,24 @@ export async function registerPalletVision(window: () => BrowserWindow | null) {
       const result = await dialog.showOpenDialog(win, { title: 'Choose PalletVision data folder', properties: ['openDirectory', 'createDirectory'] });
       if (!result.canceled) await service.setRoot(result.filePaths[0]);
     }
+    else if (action === 'selectVideo') {
+      const result = await dialog.showOpenDialog(win, { 
+        title: 'Select video file', 
+        filters: [{ name: 'Video Files', extensions: ['mp4', 'webm', 'mov', 'avi', 'mkv'] }],
+        properties: ['openFile'] 
+      });
+      const videoPath = result.canceled ? null : result.filePaths[0];
+      return { ...service.status(), videoPath };
+    }
+    else if (action === 'import') {
+      await service.importVideo(data?.videoPath, {
+        heightInches: data?.heightInches,
+        widthInches: data?.widthInches,
+        lengthInches: data?.lengthInches,
+        notes: data?.notes,
+        referenceId: data?.referenceId
+      });
+    }
     else if (action === 'open') {
       const error = await shell.openPath(service.folder(data?.id));
       if (error) throw new Error(error);

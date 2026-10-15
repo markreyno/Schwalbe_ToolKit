@@ -93,6 +93,43 @@ el('new-pallet').onclick = () => {
   el('record').hidden = false;
 };
 
+el('upload-video-btn').onclick = () => {
+  el('video-file-input').click();
+};
+
+el('video-file-input').onchange = async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  
+  if (!file.type.startsWith('video/')) {
+    message('Please select a video file.', true);
+    return;
+  }
+  
+  if (file.size > 500 * 1024 * 1024) {
+    message('Video file is too large (max 500MB).', true);
+    return;
+  }
+  
+  currentCapture = {
+    captureId: 'cap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    capturedAt: new Date().toISOString()
+  };
+  
+  recordedChunks = [file];
+  
+  el('playback').src = URL.createObjectURL(file);
+  el('playback').hidden = false;
+  el('review-actions').hidden = false;
+  el('start-record').hidden = true;
+  
+  el('home').hidden = true;
+  el('record').hidden = false;
+  
+  message('Video loaded. Review and continue to measurements.');
+  e.target.value = '';
+};
+
 el('start-record').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -136,6 +173,7 @@ el('retake').onclick = () => {
   el('review-actions').hidden = true;
   el('start-record').hidden = false;
   recordedChunks = [];
+  el('playback').src = '';
 };
 
 el('continue').onclick = () => {
@@ -161,7 +199,10 @@ el('save').onclick = async () => {
     return;
   }
   
-  const videoBlob = new Blob(recordedChunks, { type: 'video/webm' });
+  const videoBlob = recordedChunks[0] instanceof File 
+    ? recordedChunks[0] 
+    : new Blob(recordedChunks, { type: 'video/webm' });
+  
   const capture = {
     ...currentCapture,
     heightInches: h,
@@ -204,7 +245,9 @@ async function processQueue() {
       if (item.notes) formData.append('notes', item.notes);
       if (item.referenceId) formData.append('referenceId', item.referenceId);
       formData.append('capturedAt', item.capturedAt);
-      formData.append('video', item.videoBlob, 'video.webm');
+      
+      const videoExt = item.videoBlob.type === 'video/mp4' ? 'mp4' : 'webm';
+      formData.append('video', item.videoBlob, `video.${videoExt}`);
       
       const r = await fetch('/api/pallets/upload', {
         method: 'POST',
