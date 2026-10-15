@@ -34,6 +34,8 @@ jobs:
       - run: npm run package
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
       - name: Test packaged application
         shell: pwsh
         run: |
