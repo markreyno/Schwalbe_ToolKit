@@ -1,9 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { PalletVisionServer } from '../electron/palletvisionServer';
-import { readFile, mkdir, rm } from 'node:fs/promises';
+import { readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 test.describe('PalletVision Server E2E', () => {
   let server: PalletVisionServer;
@@ -11,11 +13,23 @@ test.describe('PalletVision Server E2E', () => {
   let settingsPath: string;
   let baseUrl: string;
   let deviceToken: string;
+  let testVideoPath: string;
 
   test.beforeAll(async () => {
     testRoot = path.resolve('.cache/palletvision-server-test', randomUUID());
     settingsPath = path.join(testRoot, 'settings.json');
     await mkdir(testRoot, { recursive: true });
+
+    // Generate test video at runtime
+    testVideoPath = path.join(testRoot, 'test-video.webm');
+    await promisify(execFile)('ffmpeg', [
+      '-f', 'lavfi',
+      '-i', 'testsrc=duration=5:size=640x480:rate=30',
+      '-pix_fmt', 'yuv420p',
+      '-c:v', 'libvpx',
+      testVideoPath,
+      '-y'
+    ]);
 
     server = new PalletVisionServer(settingsPath);
     await server.start();
@@ -59,7 +73,6 @@ test.describe('PalletVision Server E2E', () => {
   });
 
   test('uploads video and creates pallet folder with metadata and frames', async () => {
-    const testVideoPath = path.join(process.cwd(), 'test-pallet-video.webm');
     const videoBuffer = await readFile(testVideoPath);
 
     const formData = new FormData();
@@ -134,7 +147,6 @@ test.describe('PalletVision Server E2E', () => {
   });
 
   test('idempotent upload: same captureId does not create duplicate', async () => {
-    const testVideoPath = path.join(process.cwd(), 'test-pallet-video.webm');
     const videoBuffer = await readFile(testVideoPath);
 
     const formData = new FormData();
@@ -163,7 +175,6 @@ test.describe('PalletVision Server E2E', () => {
   });
 
   test('validates dimensions and rejects invalid uploads', async () => {
-    const testVideoPath = path.join(process.cwd(), 'test-pallet-video.webm');
     const videoBuffer = await readFile(testVideoPath);
 
     const invalidCases = [
@@ -195,7 +206,6 @@ test.describe('PalletVision Server E2E', () => {
   });
 
   test('rejects upload without device token', async () => {
-    const testVideoPath = path.join(process.cwd(), 'test-pallet-video.webm');
     const videoBuffer = await readFile(testVideoPath);
 
     const formData = new FormData();
