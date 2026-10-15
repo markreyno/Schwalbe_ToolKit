@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
+  if (ip.startsWith('fd7a:115c:a1e0:')) return true;
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
   if (parts[0] === 127) return true;
@@ -9,6 +10,7 @@ function isPrivateIP(ip: string): boolean {
   if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
   if (parts[0] === 192 && parts[1] === 168) return true;
   if (parts[0] === 169 && parts[1] === 254) return true;
+  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
   return false;
 }
 
@@ -33,12 +35,25 @@ test.describe('Freight IP validation', () => {
     expect(isPrivateIP('169.254.255.255')).toBe(true);
   });
 
+  test('accepts Tailscale CGNAT range', () => {
+    expect(isPrivateIP('100.64.0.1')).toBe(true);
+    expect(isPrivateIP('100.100.100.100')).toBe(true);
+    expect(isPrivateIP('100.127.255.255')).toBe(true);
+  });
+
+  test('accepts Tailscale IPv6 range', () => {
+    expect(isPrivateIP('fd7a:115c:a1e0::1')).toBe(true);
+    expect(isPrivateIP('fd7a:115c:a1e0:ab12::')).toBe(true);
+  });
+
   test('rejects public IP addresses', () => {
     expect(isPrivateIP('8.8.8.8')).toBe(false);
     expect(isPrivateIP('1.1.1.1')).toBe(false);
     expect(isPrivateIP('172.32.0.1')).toBe(false);
     expect(isPrivateIP('172.15.0.1')).toBe(false);
     expect(isPrivateIP('193.168.0.1')).toBe(false);
+    expect(isPrivateIP('100.63.255.255')).toBe(false);
+    expect(isPrivateIP('100.128.0.1')).toBe(false);
   });
 
   test('handles invalid IP addresses', () => {
