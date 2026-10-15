@@ -42,7 +42,7 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     await mobile.goto(local(state.qrUrl));
 
     const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair'));
-    await expect(mobile.getByRole('heading', { name: 'PalletVision' })).toBeVisible();
+    await expect(mobile.getByRole('heading', { name: 'PalletVision Data Collector' })).toBeVisible();
     const pairResp = await pairReq;
     const pairData = await pairResp.json();
     expect(pairData.deviceToken).toBeTruthy();
