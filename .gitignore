@@ -8,6 +8,8 @@ release/
 test-results/
 playwright-report/
 __pycache__/
+*.webm
+*.mp4
 *.pyc
 *.spec
 release-pallet/

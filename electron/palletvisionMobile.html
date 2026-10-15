@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PalletVision Data Collector</title>
+<style>
+* { box-sizing: border-box; }
+body { font: 14px "Segoe UI", system-ui, sans-serif; background: #f5f8fa; color: #202936; margin: 0; -webkit-font-smoothing: antialiased; }
+p, h1, h2 { margin: 0; }
+.brand-bar { background: #fff; border-bottom: 1px solid #e7eaf0; padding: 22px 24px; }
+.brand { display: flex; align-items: center; gap: 12px; max-width: 620px; margin: auto; color: #080a0b; font-size: 15px; font-weight: 850; letter-spacing: 1.3px; }
+.brand small { display: block; font-size: 10px; letter-spacing: 4.8px; color: #75808e; margin-top: 5px; }
+main { max-width: 668px; margin: auto; padding: 28px 24px 20px; }
+.eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 1.7px; color: #8892a0; }
+h1 { font-size: 30px; letter-spacing: -1px; font-weight: 650; margin: 9px 0 12px; }
+.subtitle { font-size: 12px; color: #7b8694; line-height: 1.7; }
+section { background: #fff; border: 1px solid #dfe6ef; padding: 22px; border-radius: 14px; margin: 24px 0; }
+h2 { font-size: 18px; line-height: 1.4; font-weight: 650; margin-bottom: 16px; }
+label { display: block; font-size: 12px; font-weight: 600; color: #425762; margin: 18px 0 8px; }
+button { display: inline-flex; align-items: center; justify-content: center; background: #080a0b; color: white; border: 0; border-radius: 8px; padding: 13px 16px; font: 600 12px "Segoe UI", system-ui, sans-serif; cursor: pointer; min-height: 44px; width: 100%; margin-top: 8px; }
+button:hover { background: #26343b; }
+button.secondary { background: #d4ebf8; color: #080a0b; }
+button.secondary:hover { background: #c2e2f2; }
+button:disabled { opacity: 0.45; cursor: default; }
+input, textarea { width: 100%; padding: 12px; font: 14px "Segoe UI", system-ui, sans-serif; color: #202936; background: #fff; border: 1px solid #ccd6e3; border-radius: 7px; min-height: 44px; }
+textarea { min-height: 80px; resize: vertical; }
+video { width: 100%; max-height: 400px; background: #000; border-radius: 8px; margin: 12px 0; }
+.capture-actions { display: flex; gap: 12px; margin: 16px 0; }
+#message { white-space: pre-wrap; font-size: 12px; line-height: 1.7; background: #d4ebf8; color: #253e4a; border-radius: 9px; padding: 14px; margin-top: 20px; }
+#message:empty { display: none; }
+.error { background: #fef3f3; color: #8b2020; border: 1px solid #fcc; }
+#queue { margin-top: 12px; }
+#queue .item { background: #f5f8fa; border: 1px solid #e7eaf0; border-radius: 8px; padding: 12px; margin-bottom: 8px; font-size: 11px; }
+#queue .item .status { font-weight: 600; color: #425762; }
+.status-pending { color: #8892a0; }
+.status-uploading { color: #0d7aa3; }
+.status-uploaded { color: #2d7a3f; }
+.status-failed { color: #8b2020; }
+#camera-preview { display: none; }
+footer { font-size: 8px; letter-spacing: 1.3px; color: #9aa4b1; border-top: 1px solid #e3e8ef; padding: 18px 0; margin-top: 28px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header class="brand-bar">
+<div class="brand">
+<div>SCHWALBE TOOLKIT<small>PALLETVISION DATA COLLECTOR</small></div>
+</div>
+</header>
+<main>
+<p class="eyebrow">DATA COLLECTION</p>
+<h1>PalletVision Data Collector</h1>
+<p class="subtitle">Record pallet videos and enter measured dimensions for training data.</p>
+<p id="message" role="status"></p>
+
+<section id="home">
+<h2>New Pallet</h2>
+<button id="new-pallet">Start New Pallet</button>
+<div id="queue"></div>
+<h2 style="margin-top: 30px">Recent Pallets</h2>
+<div id="pallets"></div>
+</section>
+
+<section id="record" hidden>
+<h2>Record Pallet Video</h2>
+<p>Walk around the pallet slowly. Capture the base, top, and all sides. Keep recording for 10-20 seconds.</p>
+<video id="camera-preview" autoplay playsinline muted></video>
+<video id="playback" controls hidden></video>
+<div class="capture-actions">
+<button id="start-record">Start Recording</button>
+<button id="stop-record" hidden>Stop Recording</button>
+</div>
+<div class="capture-actions" id="review-actions" hidden>
+<button id="retake" class="secondary">Retake</button>
+<button id="continue">Continue</button>
+</div>
+</section>
+
+<section id="measure" hidden>
+<h2>Pallet Measurements</h2>
+<p>Enter the actual measured dimensions in inches. Height is measured from floor to highest point, including the pallet base.</p>
+<label>Height (inches)<input id="height" type="number" step="0.1" min="0.1" required></label>
+<label>Width (inches)<input id="width" type="number" step="0.1" min="0.1" value="40" required></label>
+<label>Length (inches)<input id="length" type="number" step="0.1" min="0.1" value="48" required></label>
+<label>Reference/Barcode ID (optional)<input id="reference" type="text" maxlength="100"></label>
+<label>Notes (optional)<textarea id="notes" maxlength="500"></textarea></label>
+<button id="save">Save & Upload</button>
+<button id="back" class="secondary">Back</button>
+</section>
+
+<footer>MADE FOR A SMOOTHER WORKDAY</footer>
+</main>
+<script src="palletvisionMobile.js"></script>
+</body>
+</html>

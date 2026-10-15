@@ -1,5 +1,6 @@
 # Freight Pictures
 
+<<<<<<< HEAD
 Open Freight Pictures in the toolkit and choose a parent storage folder. Keep the toolkit open and the desktop awake. The server uses TCP port 48731 and accepts connections from any device on private networks (RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) or Tailscale (100.64.0.0/10). This includes devices on adjacent subnets or VLANs within your site LAN. Allow the toolkit on your private network in Windows Firewall if needed; no router port forwarding is required.
 
 **Network modes:**
@@ -13,6 +14,10 @@ Open Freight Pictures in the toolkit and choose a parent storage folder. Keep th
 4. In the toolkit, switch Network mode to "Tailscale"
 5. The QR code and link will use your Tailscale address (100.x.x.x or MagicDNS hostname)
 
+=======
+Open Freight Pictures in the toolkit and choose a parent storage folder. Keep the toolkit open and the desktop awake. The server uses TCP port 48731 and accepts connections from any device on private networks (RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16). This includes devices on adjacent subnets or VLANs within your site LAN. Allow the toolkit on your private network in Windows Firewall if needed; no router port forwarding is required.
+
+>>>>>>> cursor/palletvision-data-collector-eb81
 Create a shipment using company and date shipped. Shipments are stored as Company_YYYY-MM-DD; duplicate names receive a numeric suffix. The permanent master QR/link lets a phone create or select an open shipment. Use the network address selector if the computer has multiple adapters or if devices on other subnets cannot reach the default address.
 
 On the phone, collect one picture per pallet (up to 26 pictures per upload batch), enter the matching pallet count, confirm, and select Upload All. Uploads preserve original file bytes, including HEIC. Each photo is verified against its SHA-256 checksum after saving. The shipment closes only after all files are verified. Failed uploads can be retried while keeping the phone page open. A batch reserves the uploader for ten minutes after its last request.
