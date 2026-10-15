@@ -27,8 +27,8 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
       dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [storage] })) as any;
     }, storage);
 
-    await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'PalletVision', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
-    await expect(page.getByRole('heading', { name: 'PalletVision', exact: true })).toBeVisible();
+    await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
+    await expect(page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
     await page.screenshot({ path: 'test-results/palletvision-desktop.png' });
 
