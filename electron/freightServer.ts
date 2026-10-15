@@ -37,6 +37,7 @@ async function detectTailscale(): Promise<{ address?: string; hostname?: string;
     return { error: 'Tailscale detection failed: ' + e.message };
   }
 }
+
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number };
 type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; expires: number };
