@@ -2,13 +2,28 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import http from 'node:http';
 import fs from 'node:fs/promises';
-import { createWriteStream, createReadStream } from 'node:fs';
+import { createWriteStream, createReadStream, readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import busboy from 'busboy';
-import { mobilePage } from './palletvisionMobile';
+
+function getFFmpegPath(): string {
+  try {
+    const ffmpegStatic = require('ffmpeg-static');
+    if (typeof ffmpegStatic === 'string') {
+      return ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
+    }
+    return ffmpegStatic;
+  } catch {
+    return 'ffmpeg';
+  }
+}
+
+function getMobilePage(): string {
+  return readFileSync(path.join(__dirname, 'palletvisionMobile.html'), 'utf8');
+}
 
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
@@ -112,7 +127,7 @@ export class PalletVisionServer {
       urls = addresses.map(a => `http://${a}:${this.port}`);
     }
     const base = urls[0] || `http://127.0.0.1:${this.port}`;
-    return { root: this.root, running: !!this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), pallets: this.pallets.map(p => ({ ...p })) };
+    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), pallets: this.pallets.map(p => ({ ...p })) };
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -133,7 +148,7 @@ export class PalletVisionServer {
     
     if (req.method === 'GET' && url.pathname === '/') { 
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); 
-      res.end(mobilePage); 
+      res.end(getMobilePage()); 
       return; 
     }
 
@@ -293,6 +308,7 @@ export class PalletVisionServer {
       const framesDir = path.join(pallet.folder, 'frames');
       
       const targetFrames = 15;
+      const ffmpegPath = getFFmpegPath();
       const ffmpegArgs = [
         '-i', videoPath,
         '-vf', `select='not(mod(n\\,5))',scale=640:-1`,
@@ -301,7 +317,7 @@ export class PalletVisionServer {
         path.join(framesDir, 'frame_%04d.jpg')
       ];
       
-      await promisify(execFile)('ffmpeg', ffmpegArgs, { timeout: 60000 });
+      await promisify(execFile)(ffmpegPath, ffmpegArgs, { timeout: 60000 });
       
       const frames = await fs.readdir(framesDir);
       pallet.framesExtracted = frames.length;
