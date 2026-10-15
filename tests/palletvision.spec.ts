@@ -5,8 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-test.use({ channel: 'msedge' });
-
 test('palletvision upload creates folders, stores metadata, extracts frames', async ({ browser, request }) => {
   const profile = path.resolve('.cache/palletvision-tests', randomUUID());
   const storage = path.join(profile, 'data');
