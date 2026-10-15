@@ -56,6 +56,20 @@ async function detectTailscale(): Promise<{ address?: string; hostname?: string;
 
 const token = () => randomBytes(24).toString('hex');
 
+async function moveVideoFile(source: string, dest: string): Promise<void> {
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  try {
+    await fs.rename(source, dest);
+  } catch (e: any) {
+    if (e?.code === 'EXDEV') {
+      await fs.copyFile(source, dest);
+      await fs.unlink(source).catch(() => {});
+    } else {
+      throw e;
+    }
+  }
+}
+
 type Pallet = {
   id: string;
   captureId: string;
@@ -113,6 +127,18 @@ export class PalletVisionServer {
   async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); }
 
   folder(id: string) { const p = this.pallets.find(p => p.id === id); if (!p) throw new Error('Pallet not found.'); return p.folder; }
+
+  private stagingDir() { return path.join(this.root, '.tmp'); }
+
+  private async ensureStagingDir() {
+    const dir = this.stagingDir();
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  private newStagingPath(ext: string, prefix: string) {
+    return path.join(this.stagingDir(), `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}.${ext}`);
+  }
 
   async updateMetadata(id: string, updates: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean }) {
     const pallet = this.pallets.find(p => p.id === id);
@@ -172,6 +198,7 @@ export class PalletVisionServer {
     if (!lengthInches || lengthInches <= 0) throw new Error('Invalid length.');
     
     this.writing = true;
+    let stagedPath: string | null = null;
     try {
       const captureId = `cap_desktop_${Date.now()}_${randomBytes(3).toString('hex')}`;
       const palletId = `pallet_${String(this.pallets.length + 1).padStart(4, '0')}`;
@@ -181,8 +208,12 @@ export class PalletVisionServer {
       await fs.mkdir(path.join(palletFolder, 'frames'), { recursive: true });
       
       const videoExt = ext === 'mov' || ext === 'avi' || ext === 'mkv' ? 'mp4' : ext;
+      await this.ensureStagingDir();
+      stagedPath = this.newStagingPath(videoExt, 'import');
+      await fs.copyFile(videoPath, stagedPath);
       const finalVideoPath = path.join(palletFolder, `video.${videoExt}`);
-      await fs.copyFile(videoPath, finalVideoPath);
+      await moveVideoFile(stagedPath, finalVideoPath);
+      stagedPath = null;
       
       const pallet: Pallet = {
         id: palletId,
@@ -226,6 +257,7 @@ export class PalletVisionServer {
       
       void this.extractFrames(pallet);
     } finally {
+      if (stagedPath) await fs.unlink(stagedPath).catch(() => {});
       this.writing = false;
     }
   }
@@ -298,10 +330,12 @@ export class PalletVisionServer {
       if (this.writing) throw new Error('Another pallet is being processed. Retry.');
       
       this.writing = true;
+      let videoPath: string | null = null;
       try {
+        await this.ensureStagingDir();
         const fields: Record<string, string> = {};
-        let videoPath: string | null = null;
         let videoSize = 0;
+        let videoWriteDone: Promise<void> | null = null;
 
         const bb = busboy({ headers: req.headers, limits: { fileSize: 500 * 1024 * 1024 } });
 
@@ -316,7 +350,7 @@ export class PalletVisionServer {
           }
           
           const ext = info.filename?.endsWith('.mp4') ? 'mp4' : 'webm';
-          const tempPath = path.join(os.tmpdir(), `pallet-upload-${Date.now()}.${ext}`);
+          const tempPath = this.newStagingPath(ext, 'upload');
           videoPath = tempPath;
           const writeStream = createWriteStream(tempPath);
           
@@ -324,11 +358,13 @@ export class PalletVisionServer {
             videoSize += chunk.length;
           });
           
-          file.pipe(writeStream);
-          
-          writeStream.on('error', (err) => {
-            file.resume();
+          videoWriteDone = new Promise<void>((resolve, reject) => {
+            writeStream.on('finish', () => resolve());
+            writeStream.on('error', reject);
+            file.on('error', reject);
           });
+          
+          file.pipe(writeStream);
         });
 
         await new Promise((resolve, reject) => {
@@ -336,6 +372,7 @@ export class PalletVisionServer {
           bb.on('error', reject);
           req.pipe(bb);
         });
+        if (videoWriteDone) await videoWriteDone;
 
         const { captureId, heightInches, widthInches, lengthInches, notes, referenceId, capturedAt } = fields;
         
@@ -365,8 +402,8 @@ export class PalletVisionServer {
         
         const videoExt = (videoPath as string).endsWith('.mp4') ? 'mp4' : 'webm';
         const finalVideoPath = path.join(palletFolder, `video.${videoExt}`);
-        await fs.copyFile(videoPath as string, finalVideoPath);
-        await fs.unlink(videoPath as string).catch(() => {});
+        await moveVideoFile(videoPath as string, finalVideoPath);
+        videoPath = null;
         
         const pallet: Pallet = {
           id: palletId,
@@ -415,7 +452,10 @@ export class PalletVisionServer {
         void this.extractFrames(pallet);
         
         json({ palletId, status: 'uploaded', processingStatus: 'pending' });
-      } finally { this.writing = false; }
+      } finally {
+        if (videoPath) await fs.unlink(videoPath).catch(() => {});
+        this.writing = false;
+      }
       return;
     }
 

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { PalletVisionServer } from '../electron/palletvisionServer';
-import { readFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, rm, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
@@ -119,6 +119,9 @@ test.describe('PalletVision Server E2E', () => {
     await access(path.join(palletFolder, 'video.webm'));
     await access(path.join(palletFolder, 'metadata.json'));
     await access(path.join(palletFolder, 'frames'));
+
+    const tmpEntries = await readdir(path.join(testRoot, '.tmp')).catch(() => [] as string[]);
+    expect(tmpEntries.filter((f) => f.startsWith('upload-'))).toHaveLength(0);
 
     const metadataContent = await readFile(path.join(palletFolder, 'metadata.json'), 'utf8');
     const metadata = JSON.parse(metadataContent);

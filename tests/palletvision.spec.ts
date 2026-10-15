@@ -99,6 +99,9 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     expect(files).toContain('metadata.json');
     expect(files).toContain('frames');
 
+    const stagingLeftovers = await fs.readdir(path.join(storage, '.tmp')).catch(() => [] as string[]);
+    expect(stagingLeftovers.filter((f) => f.startsWith('upload-'))).toHaveLength(0);
+
     const metadata = JSON.parse(await fs.readFile(path.join(palletFolder, 'metadata.json'), 'utf8'));
     expect(metadata.pallet_id).toBe(uploadData.palletId);
     expect(metadata.capture_id).toBe('cap_test_001');
