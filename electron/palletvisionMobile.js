@@ -9,13 +9,19 @@ let recordedChunks = [];
 
 const el = (id) => document.getElementById(id);
 
+function inBrowserCameraSupported() {
+  return Boolean(window.isSecureContext && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
+}
+
+window.inBrowserCameraSupported = inBrowserCameraSupported;
+
 function message(text, error = false) {
   el('message').textContent = text;
   el('message').className = error ? 'error' : '';
 }
 
 async function initDB() {
-  const req = indexedDB.open('PalletVision', 1);
+  const req = indexedDB.open('PalletVision', 2);
   req.onupgradeneeded = (e) => {
     const database = e.target.result;
     if (!database.objectStoreNames.contains('captures')) {
@@ -31,6 +37,17 @@ async function initDB() {
   });
 }
 
+async function logCameraDiagnostic(payload) {
+  if (!deviceToken) return;
+  try {
+    await fetch('/api/diagnostics/client', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + deviceToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'camera', ...payload, captureId: currentCapture?.captureId })
+    });
+  } catch { /* ignore when desktop offline */ }
+}
+
 async function pair() {
   if (deviceToken) return;
   try {
@@ -44,6 +61,17 @@ async function pair() {
   }
 }
 
+function recordAttempt(item, attempt) {
+  if (!item.attemptHistory) item.attemptHistory = [];
+  item.attemptHistory.push(attempt);
+  item.lastError = attempt;
+}
+
+async function persistQueueItem(item) {
+  const tx = db.transaction('queue', 'readwrite');
+  tx.objectStore('queue').put(item);
+}
+
 async function loadQueue() {
   const tx = db.transaction('queue', 'readonly');
   const store = tx.objectStore('queue');
@@ -52,6 +80,16 @@ async function loadQueue() {
     uploadQueue = req.result;
     renderQueue();
   };
+}
+
+function formatAttempt(attempt) {
+  if (!attempt) return '';
+  const lines = ['Time: ' + attempt.at];
+  if (attempt.networkError) lines.push('Network: ' + attempt.networkError);
+  if (attempt.httpStatus) lines.push('HTTP: ' + attempt.httpStatus);
+  if (attempt.errorCode) lines.push('Code: ' + attempt.errorCode);
+  if (attempt.message) lines.push('Message: ' + attempt.message);
+  return lines.join('\n');
 }
 
 function renderQueue() {
@@ -65,23 +103,71 @@ function renderQueue() {
     const div = document.createElement('div');
     div.className = 'item';
     const status = item.status || 'pending';
-    div.innerHTML = '<div class="status status-' + status + '">' + status.toUpperCase() + '</div>' +
-      '<div>Capture ' + item.captureId + ' · ' + item.heightInches + '"H × ' + item.widthInches + '"W × ' + item.lengthInches + '"L</div>' +
-      (status === 'failed' ? '<button onclick="window.retryUpload(\'' + item.captureId + '\')">Retry</button>' : '');
+    let html = '<div class="status status-' + status + '">' + status.toUpperCase() + '</div>' +
+      '<div>Capture ' + item.captureId + ' · ' + item.heightInches + '"H × ' + item.widthInches + '"W × ' + item.lengthInches + '"L</div>';
+    if (status === 'failed' && item.lastError) {
+      html += '<div class="last-error">' + (item.lastError.message || item.lastError.networkError || 'Upload failed') + '</div>';
+      html += '<button type="button" class="secondary" style="margin-top:8px;width:auto;padding:8px 12px" data-details="' + item.captureId + '">Details</button>';
+      html += '<div class="details" id="details-' + item.captureId + '" hidden>' + formatAttempt(item.lastError) + '</div>';
+    }
+    if (status === 'failed') {
+      html += '<button type="button" onclick="window.retryUpload(\'' + item.captureId + '\')">Retry</button>';
+    }
+    div.innerHTML = html;
     q.appendChild(div);
   });
+  q.querySelectorAll('[data-details]').forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.getAttribute('data-details');
+      const panel = el('details-' + id);
+      if (panel) panel.hidden = !panel.hidden;
+    };
+  });
+}
+
+async function parseApiError(r) {
+  try {
+    const d = await r.json();
+    return { httpStatus: r.status, errorCode: d.code || 'UNKNOWN', message: d.message || d.error || r.statusText };
+  } catch {
+    return { httpStatus: r.status, errorCode: 'UNKNOWN', message: r.statusText };
+  }
 }
 
 async function loadPallets() {
   try {
     const r = await fetch('/api/health', {
-      headers: deviceToken ? { 'Authorization': 'Bearer ' + deviceToken } : {}
+      headers: deviceToken ? { Authorization: 'Bearer ' + deviceToken } : {}
     });
+    if (!r.ok) {
+      const err = await parseApiError(r);
+      message(err.message, true);
+      return;
+    }
     const d = await r.json();
     message('Connected to desktop. ' + d.palletCount + ' pallets stored.');
-  } catch {
+  } catch (e) {
     message('Desktop offline. Uploads will queue locally.', true);
   }
+}
+
+function loadVideoFileIntoReview(file) {
+  recordedChunks = [file];
+  el('playback').src = URL.createObjectURL(file);
+  el('playback').hidden = false;
+  el('review-actions').hidden = false;
+  el('start-record').hidden = true;
+  el('stop-record').hidden = true;
+  message('Video ready. Review and continue to measurements.');
+}
+
+function openNativeCameraCapture(reason) {
+  const secure = window.isSecureContext;
+  const hint = secure
+    ? 'Could not use live preview. Opening your phone camera app instead.'
+    : 'Live preview requires HTTPS. This page uses HTTP, so opening your phone camera app instead.';
+  message(hint + (reason ? ' (' + reason + ')' : ''), false);
+  el('camera-capture-input').click();
 }
 
 el('new-pallet').onclick = () => {
@@ -100,37 +186,50 @@ el('upload-video-btn').onclick = () => {
 el('video-file-input').onchange = async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
-  
   if (!file.type.startsWith('video/')) {
     message('Please select a video file.', true);
     return;
   }
-  
   if (file.size > 500 * 1024 * 1024) {
     message('Video file is too large (max 500MB).', true);
     return;
   }
-  
-  currentCapture = {
-    captureId: 'cap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-    capturedAt: new Date().toISOString()
-  };
-  
-  recordedChunks = [file];
-  
-  el('playback').src = URL.createObjectURL(file);
-  el('playback').hidden = false;
-  el('review-actions').hidden = false;
-  el('start-record').hidden = true;
-  
+  if (!currentCapture) {
+    currentCapture = {
+      captureId: 'cap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      capturedAt: new Date().toISOString()
+    };
+  }
+  loadVideoFileIntoReview(file);
   el('home').hidden = true;
   el('record').hidden = false;
-  
-  message('Video loaded. Review and continue to measurements.');
+  e.target.value = '';
+};
+
+el('camera-capture-input').onchange = async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (!currentCapture) {
+    currentCapture = {
+      captureId: 'cap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      capturedAt: new Date().toISOString()
+    };
+  }
+  loadVideoFileIntoReview(file);
   e.target.value = '';
 };
 
 el('start-record').onclick = async () => {
+  if (!inBrowserCameraSupported()) {
+    await logCameraDiagnostic({
+      reason: 'media_devices_unavailable',
+      message: 'navigator.mediaDevices or getUserMedia unavailable (non-secure HTTP origin)',
+      secureContext: window.isSecureContext,
+      hasMediaDevices: Boolean(navigator.mediaDevices)
+    });
+    openNativeCameraCapture('camera API unavailable');
+    return;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment' },
@@ -156,7 +255,13 @@ el('start-record').onclick = async () => {
     el('stop-record').hidden = false;
     message('Recording... Keep the entire pallet visible.');
   } catch (e) {
-    message('Camera access denied: ' + e.message, true);
+    await logCameraDiagnostic({
+      reason: 'permission_denied',
+      message: e.message,
+      secureContext: window.isSecureContext,
+      hasMediaDevices: Boolean(navigator.mediaDevices)
+    });
+    openNativeCameraCapture(e.message || 'permission denied');
   }
 };
 
@@ -198,11 +303,9 @@ el('save').onclick = async () => {
     message('No video recorded.', true);
     return;
   }
-  
-  const videoBlob = recordedChunks[0] instanceof File 
-    ? recordedChunks[0] 
+  const videoBlob = recordedChunks[0] instanceof File
+    ? recordedChunks[0]
     : new Blob(recordedChunks, { type: 'video/webm' });
-  
   const capture = {
     ...currentCapture,
     heightInches: h,
@@ -211,9 +314,9 @@ el('save').onclick = async () => {
     notes: el('notes').value,
     referenceId: el('reference').value,
     videoBlob: videoBlob,
-    status: 'pending'
+    status: 'pending',
+    attemptHistory: []
   };
-  
   const tx = db.transaction(['captures', 'queue'], 'readwrite');
   tx.objectStore('captures').put(capture);
   tx.objectStore('queue').put(capture);
@@ -235,7 +338,7 @@ async function processQueue() {
     if (item.status === 'uploaded' || item.status === 'uploading') continue;
     item.status = 'uploading';
     renderQueue();
-    
+    const attempt = { at: new Date().toISOString() };
     try {
       const formData = new FormData();
       formData.append('captureId', item.captureId);
@@ -245,34 +348,80 @@ async function processQueue() {
       if (item.notes) formData.append('notes', item.notes);
       if (item.referenceId) formData.append('referenceId', item.referenceId);
       formData.append('capturedAt', item.capturedAt);
-      
       const videoExt = item.videoBlob.type === 'video/mp4' ? 'mp4' : 'webm';
-      formData.append('video', item.videoBlob, `video.${videoExt}`);
-      
+      formData.append('video', item.videoBlob, 'video.' + videoExt);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120000);
       const r = await fetch('/api/pallets/upload', {
         method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + deviceToken },
-        body: formData
+        headers: { Authorization: 'Bearer ' + deviceToken },
+        body: formData,
+        signal: controller.signal
       });
-      
-      if (!r.ok) throw new Error('Upload failed: ' + r.statusText);
+      clearTimeout(timer);
+      if (!r.ok) {
+        const err = await parseApiError(r);
+        attempt.httpStatus = err.httpStatus;
+        attempt.errorCode = err.errorCode;
+        attempt.message = err.message;
+        throw new Error(err.message);
+      }
       const d = await r.json();
       item.status = 'uploaded';
       item.palletId = d.palletId;
-      const tx = db.transaction('queue', 'readwrite');
-      tx.objectStore('queue').put(item);
+      item.lastError = null;
+      await persistQueueItem(item);
       renderQueue();
       message('Pallet uploaded successfully!');
     } catch (e) {
+      if (e.name === 'AbortError') {
+        attempt.networkError = 'timeout';
+        attempt.message = 'Upload timed out after 2 minutes.';
+      } else if (e.message && !attempt.message) {
+        attempt.networkError = 'unreachable';
+        attempt.message = e.message;
+      }
+      recordAttempt(item, attempt);
       item.status = 'failed';
-      const tx = db.transaction('queue', 'readwrite');
-      tx.objectStore('queue').put(item);
+      await persistQueueItem(item);
       renderQueue();
-      message('Upload failed: ' + e.message, true);
+      message(item.lastError?.message || 'Upload failed.', true);
       break;
     }
   }
 }
+
+el('test-connection').onclick = async () => {
+  const resultEl = el('connection-test-result');
+  resultEl.hidden = false;
+  resultEl.textContent = 'Testing connection...';
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const r = await fetch('/api/health', {
+      headers: deviceToken ? { Authorization: 'Bearer ' + deviceToken } : {},
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (r.ok) {
+      const d = await r.json();
+      resultEl.textContent = d.auth === 'ok'
+        ? 'Reachable — auth OK. ' + d.palletCount + ' pallets on desktop.'
+        : 'Reachable but auth status unknown.';
+      return;
+    }
+    const err = await parseApiError(r);
+    if (err.errorCode === 'AUTH_MISSING' || err.errorCode === 'AUTH_INVALID' || err.errorCode === 'AUTH_EXPIRED') {
+      resultEl.textContent = 'Reachable — auth failed: ' + err.message;
+      return;
+    }
+    resultEl.textContent = 'Reachable — error: ' + err.message;
+  } catch (e) {
+    resultEl.textContent = e.name === 'AbortError'
+      ? 'Unreachable — connection timed out.'
+      : 'Unreachable — ' + (e.message || 'network error');
+  }
+};
 
 window.retryUpload = (captureId) => {
   const item = uploadQueue.find((i) => i.captureId === captureId);

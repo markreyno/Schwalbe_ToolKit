@@ -1,13 +1,24 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import http from 'node:http';
+import https from 'node:https';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs/promises';
-import { createWriteStream, createReadStream, readFileSync } from 'node:fs';
+import { createWriteStream, readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import QRCode from 'qrcode';
 import busboy from 'busboy';
+import {
+  PalletVisionUploadLog,
+  apiErrorBody,
+  DEVICE_TOKEN_MAX_AGE_MS,
+  MAX_UPLOAD_BYTES,
+  type PalletVisionErrorCode,
+  type PalletVisionLogEntry,
+  humanizeLogEntry
+} from './palletvisionDiagnostics';
 
 function getFFmpegPath(): string {
   try {
@@ -87,17 +98,109 @@ type Pallet = {
 
 export class PalletVisionServer {
   private server?: http.Server;
+  private httpsServer?: https.Server;
   private root = '';
   private deviceTokens = new Map<string, { token: string; createdAt: number }>();
   private pallets: Pallet[] = [];
   private port = 0;
+  private httpsPort = 0;
+  private httpsError = '';
   private preferredAddress = '';
   private useTailscale = false;
+  private useTailscaleHttps = false;
   private error = '';
   private writing = false;
   private persistence: Promise<void> = Promise.resolve();
+  private uploadLog: PalletVisionUploadLog;
 
-  constructor(private settings: string) {}
+  constructor(private settings: string, logsDir: string) {
+    this.uploadLog = new PalletVisionUploadLog(logsDir);
+  }
+
+  getLogDirectory() {
+    return this.uploadLog.directory();
+  }
+
+  getUploadLogEntries(filter: 'all' | 'failures' = 'failures', limit = 50) {
+    return this.uploadLog.recent(filter, limit);
+  }
+
+  async exportLogs(destPath: string) {
+    await this.uploadLog.exportTo(destPath);
+  }
+
+  private async networkLogContext(): Promise<Pick<PalletVisionLogEntry, 'networkMode' | 'tailscaleAvailable' | 'tailscaleError' | 'storageRoot'>> {
+    const tailscale = await detectTailscale();
+    return {
+      networkMode: this.useTailscale ? 'tailscale' : 'local',
+      tailscaleAvailable: !tailscale.error,
+      tailscaleError: tailscale.error,
+      storageRoot: this.root
+    };
+  }
+
+  private async log(entry: Omit<PalletVisionLogEntry, 'ts'> & { ts?: string }) {
+    const full: PalletVisionLogEntry = { ts: entry.ts || new Date().toISOString(), ...entry };
+    await this.uploadLog.append(full);
+  }
+
+  private resolveAuth(authHeader?: string): { ok: true; token: string } | { ok: false; reason: 'missing' | 'invalid' | 'expired' } {
+    if (!authHeader?.startsWith('Bearer ')) return { ok: false, reason: 'missing' };
+    const tokenValue = authHeader.slice(7);
+    const record = this.deviceTokens.get(tokenValue);
+    if (!record) return { ok: false, reason: 'invalid' };
+    if (Date.now() - record.createdAt > DEVICE_TOKEN_MAX_AGE_MS) return { ok: false, reason: 'expired' };
+    return { ok: true, token: tokenValue };
+  }
+
+  private authCode(reason: 'missing' | 'invalid' | 'expired'): PalletVisionErrorCode {
+    if (reason === 'missing') return 'AUTH_MISSING';
+    if (reason === 'expired') return 'AUTH_EXPIRED';
+    return 'AUTH_INVALID';
+  }
+
+  private authMessage(reason: 'missing' | 'invalid' | 'expired') {
+    if (reason === 'missing') return 'Pair your device before using this feature.';
+    if (reason === 'expired') return 'Device pairing expired. Open this page again to pair.';
+    return 'Invalid device token. Open this page again to pair.';
+  }
+
+  private async readJsonBody(req: IncomingMessage) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    if (!chunks.length) return {} as Record<string, unknown>;
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+  }
+
+  private readonly onRequest = (req: IncomingMessage, res: ServerResponse) => {
+    void this.handle(req, res).catch((e) => {
+      if (!res.headersSent) {
+        const code = (e as { palletvisionCode?: PalletVisionErrorCode }).palletvisionCode;
+        const body = code ? apiErrorBody(code, e.message) : apiErrorBody('VALIDATION_ERROR', e.message);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      } else res.end();
+    });
+  };
+
+  private respondError(
+    res: ServerResponse,
+    status: number,
+    code: PalletVisionErrorCode,
+    message: string,
+    logFields: Partial<PalletVisionLogEntry> = {}
+  ) {
+    void this.log({
+      event: logFields.event || 'request',
+      outcome: 'failure',
+      httpStatus: status,
+      errorCode: code,
+      message,
+      ...logFields
+    });
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(apiErrorBody(code, message)));
+  }
 
   async start() {
     if (process.platform === 'win32') {
@@ -107,16 +210,96 @@ export class PalletVisionServer {
         if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) this.preferredAddress = address;
       } catch { /* Address selector remains available */ }
     }
-    try { const data = JSON.parse(await fs.readFile(this.settings, 'utf8')); this.root = data.root || ''; this.deviceTokens = new Map(data.deviceTokens || []); this.pallets = data.pallets || []; this.useTailscale = data.useTailscale || false; } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read PalletVision settings.'; }
+    try {
+      const data = JSON.parse(await fs.readFile(this.settings, 'utf8'));
+      this.root = data.root || '';
+      this.deviceTokens = new Map(data.deviceTokens || []);
+      this.pallets = data.pallets || [];
+      this.useTailscale = data.useTailscale || false;
+      this.useTailscaleHttps = data.useTailscaleHttps || false;
+    } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read PalletVision settings.'; }
     if (!this.root) this.root = path.join(os.homedir(), 'PalletVision', 'data');
-    this.server = http.createServer((req, res) => { void this.handle(req, res).catch(e => { if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); } else res.end(); }); });
-    await new Promise<void>(resolve => { this.server!.once('error', e => { this.error = e.message; resolve(); }); this.server!.listen(48732, '0.0.0.0', () => { this.port = 48732; resolve(); }); });
+    this.server = http.createServer(this.onRequest);
+    let bindError = '';
+    await new Promise<void>((resolve) => {
+      this.server!.once('error', (e) => {
+        bindError = e.message;
+        this.error = e.message;
+        resolve();
+      });
+      this.server!.listen(48732, '0.0.0.0', () => {
+        this.port = 48732;
+        resolve();
+      });
+    });
+    const net = await this.networkLogContext();
+    await this.log({
+      event: bindError ? 'server_bind' : 'server_start',
+      outcome: bindError ? 'failure' : 'success',
+      serverBindError: bindError || undefined,
+      message: bindError || 'PalletVision upload server listening on port 48732',
+      ...net
+    });
+    await this.restartHttps();
   }
 
-  stop() { this.server?.close(); this.server?.closeAllConnections(); }
+  stop() {
+    this.server?.close();
+    this.server?.closeAllConnections();
+    this.httpsServer?.close();
+    this.httpsServer = undefined;
+  }
+
+  async setTailscaleHttpsMode(enabled: boolean) {
+    if (!this.useTailscale && enabled) throw new Error('Enable Tailscale network mode first.');
+    this.useTailscaleHttps = enabled;
+    await this.persist();
+    await this.restartHttps();
+  }
+
+  private async restartHttps() {
+    if (this.httpsServer) {
+      this.httpsServer.close();
+      this.httpsServer = undefined;
+      this.httpsPort = 0;
+    }
+    this.httpsError = '';
+    if (!this.useTailscaleHttps) return;
+    const tailscale = await detectTailscale();
+    if (!tailscale.hostname) {
+      this.httpsError = tailscale.error || 'Tailscale MagicDNS name is not available.';
+      return;
+    }
+    const certDir = path.join(path.dirname(this.settings), 'palletvision-https');
+    await fs.mkdir(certDir, { recursive: true });
+    const certFile = path.join(certDir, 'cert.pem');
+    const keyFile = path.join(certDir, 'key.pem');
+    try {
+      await promisify(execFile)('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, tailscale.hostname], { timeout: 120000 });
+    } catch (e: any) {
+      this.httpsError = `Could not obtain Tailscale certificate: ${e.message}`;
+      const net = await this.networkLogContext();
+      await this.log({ event: 'server_bind', outcome: 'failure', message: this.httpsError, serverBindError: e.message, ...net });
+      return;
+    }
+    const key = await fs.readFile(keyFile);
+    const cert = await fs.readFile(certFile);
+    this.httpsServer = https.createServer({ key, cert }, this.onRequest);
+    let bindError = '';
+    await new Promise<void>((resolve) => {
+      this.httpsServer!.once('error', (e) => { bindError = e.message; resolve(); });
+      this.httpsServer!.listen(48733, '0.0.0.0', () => { this.httpsPort = 48733; resolve(); });
+    });
+    if (bindError) {
+      this.httpsError = bindError;
+      this.httpsServer?.close();
+      this.httpsServer = undefined;
+      this.httpsPort = 0;
+    }
+  }
 
   private persist() {
-    const snapshot = JSON.stringify({ root: this.root, deviceTokens: Array.from(this.deviceTokens.entries()), pallets: this.pallets, useTailscale: this.useTailscale });
+    const snapshot = JSON.stringify({ root: this.root, deviceTokens: Array.from(this.deviceTokens.entries()), pallets: this.pallets, useTailscale: this.useTailscale, useTailscaleHttps: this.useTailscaleHttps });
     const next = this.persistence.catch(() => {}).then(async () => { await fs.mkdir(path.dirname(this.settings), { recursive: true }); const temp = this.settings + '.tmp'; await fs.writeFile(temp, snapshot); await fs.rename(temp, this.settings); });
     this.persistence = next;
     return next;
@@ -124,7 +307,12 @@ export class PalletVisionServer {
 
   async setRoot(root: string) { if (this.writing) throw new Error('Wait for active upload to complete.'); await fs.access(root); this.root = root; await this.persist(); }
   
-  async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); }
+  async setTailscaleMode(enabled: boolean) {
+    this.useTailscale = enabled;
+    if (!enabled) this.useTailscaleHttps = false;
+    await this.persist();
+    await this.restartHttps();
+  }
 
   folder(id: string) { const p = this.pallets.find(p => p.id === id); if (!p) throw new Error('Pallet not found.'); return p.folder; }
 
@@ -265,7 +453,9 @@ export class PalletVisionServer {
   async status() {
     const tailscale = await detectTailscale();
     let urls: string[];
-    if (this.useTailscale && tailscale.hostname) {
+    if (this.useTailscale && this.useTailscaleHttps && this.httpsPort && tailscale.hostname) {
+      urls = [`https://${tailscale.hostname}:${this.httpsPort}`];
+    } else if (this.useTailscale && tailscale.hostname) {
       urls = [`http://${tailscale.hostname}:${this.port}`];
     } else if (this.useTailscale && tailscale.address) {
       urls = [`http://${tailscale.address}:${this.port}`];
@@ -275,24 +465,58 @@ export class PalletVisionServer {
       urls = addresses.map(a => `http://${a}:${this.port}`);
     }
     const base = urls[0] || `http://127.0.0.1:${this.port}`;
-    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), pallets: this.pallets.map(p => ({ ...p })) };
+    return {
+      root: this.root,
+      running: !!this.port,
+      port: this.port,
+      httpsPort: this.httpsPort,
+      httpsRunning: !!this.httpsPort,
+      httpsError: this.httpsError,
+      error: this.error,
+      addresses: urls,
+      useTailscale: this.useTailscale,
+      useTailscaleHttps: this.useTailscaleHttps,
+      tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error },
+      qrUrl: `${base}/`,
+      qr: await QRCode.toDataURL(`${base}/`),
+      pallets: this.pallets.map((p) => ({ ...p })),
+      logFolder: this.uploadLog.directory(),
+      uploadLogEntries: this.uploadLog.recent('failures', 40),
+      uploadLogSummary: this.uploadLog.recent('failures', 40).map(humanizeLogEntry)
+    };
   }
 
-  private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+  private async handle(req: IncomingMessage, res: ServerResponse) {
     const clientIP = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    const method = req.method || 'GET';
+    const url = new URL(req.url || '/', 'http://local');
+    const net = await this.networkLogContext();
+    const baseLog: Partial<PalletVisionLogEntry> = { method, path: url.pathname, clientIp: clientIP, ...net };
+
     if (clientIP && !isPrivateIP(clientIP)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' });
-      res.end('Access denied. PalletVision only accepts connections from private networks (RFC1918). Your IP: ' + clientIP);
+      this.respondError(res, 403, 'IP_REJECTED_PUBLIC', `Access denied. PalletVision only accepts private network clients. Your IP: ${clientIP}`, {
+        ...baseLog,
+        ipAllowed: false,
+        ipRejectReason: 'Client IP is not on a private (RFC1918) network'
+      });
       return;
     }
-    const url = new URL(req.url || '/', 'http://local');
+
     if (req.headers.origin) {
       const originHost = new URL(req.headers.origin).host;
       if (originHost !== req.headers.host) {
-        throw new Error('Invalid request origin. Origin host does not match request host.');
+        this.respondError(res, 403, 'ORIGIN_MISMATCH', 'Invalid request origin. Origin host does not match request host.', {
+          ...baseLog,
+          ipAllowed: true
+        });
+        return;
       }
     }
-    const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
+
+    const json = (value: unknown) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(value));
+    };
     
     if (req.method === 'GET' && url.pathname === '/') { 
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); 
@@ -312,25 +536,55 @@ export class PalletVisionServer {
       const deviceToken = token();
       this.deviceTokens.set(deviceToken, { token: deviceToken, createdAt: Date.now() });
       await this.persist();
+      void this.log({ event: 'request', outcome: 'success', auth: 'not_required', ...baseLog, ipAllowed: true, message: 'Device paired' });
       json({ deviceToken });
       return;
     }
 
-    const authHeader = req.headers.authorization;
-    const deviceToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!deviceToken || !this.deviceTokens.has(deviceToken)) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized. Pair your device first.' }));
+    const auth = this.resolveAuth(req.headers.authorization);
+    if (!auth.ok) {
+      this.respondError(res, 401, this.authCode(auth.reason), this.authMessage(auth.reason), {
+        ...baseLog,
+        ipAllowed: true,
+        auth: auth.reason
+      });
+      return;
+    }
+    const deviceToken = auth.token;
+
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      void this.log({ event: 'request', outcome: 'success', auth: 'ok', ...baseLog, ipAllowed: true, message: 'Health check' });
+      json({ status: 'ok', palletCount: this.pallets.length, auth: 'ok' });
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/health') { json({ status: 'ok', palletCount: this.pallets.length }); return; }
+    if (req.method === 'POST' && url.pathname === '/api/diagnostics/client') {
+      const body = await this.readJsonBody(req);
+      const reason = String(body.reason || body.type || 'client_report');
+      const message = String(body.message || 'Client diagnostic event');
+      await this.log({
+        event: body.type === 'camera' || body.kind === 'camera' ? 'client_camera' : 'request',
+        outcome: 'failure',
+        auth: 'ok',
+        captureId: typeof body.captureId === 'string' ? body.captureId : undefined,
+        errorCode: reason,
+        message,
+        ...baseLog,
+        ipAllowed: true
+      });
+      json({ status: 'logged' });
+      return;
+    }
 
     if (req.method === 'POST' && url.pathname === '/api/pallets/upload') {
-      if (this.writing) throw new Error('Another pallet is being processed. Retry.');
+      if (this.writing) {
+        this.respondError(res, 409, 'UPLOAD_BUSY', 'Another pallet is being processed. Wait and retry.', { ...baseLog, ipAllowed: true, auth: 'ok', event: 'upload' });
+        return;
+      }
       
       this.writing = true;
       let videoPath: string | null = null;
+      let logCaptureId: string | undefined;
       try {
         await this.ensureStagingDir();
         const fields: Record<string, string> = {};
@@ -375,6 +629,7 @@ export class PalletVisionServer {
         if (videoWriteDone) await videoWriteDone;
 
         const { captureId, heightInches, widthInches, lengthInches, notes, referenceId, capturedAt } = fields;
+        logCaptureId = captureId;
         
         if (!captureId || typeof captureId !== 'string') throw new Error('Missing or invalid captureId.');
         if (this.pallets.some(p => p.captureId === captureId)) {
@@ -451,7 +706,29 @@ export class PalletVisionServer {
         
         void this.extractFrames(pallet);
         
+        void this.log({
+          event: 'upload',
+          outcome: 'success',
+          auth: 'ok',
+          captureId,
+          sizeBytes: videoSize,
+          palletId,
+          ...baseLog,
+          ipAllowed: true
+        });
         json({ palletId, status: 'uploaded', processingStatus: 'pending' });
+      } catch (e: any) {
+        const errno = e?.code ? String(e.code) : undefined;
+        const code: PalletVisionErrorCode = errno === 'ENOSPC' || errno === 'EACCES' || errno === 'EXDEV' ? 'DISK_WRITE_ERROR' : 'VALIDATION_ERROR';
+        this.respondError(res, 400, code, e.message || 'Upload failed.', {
+          event: 'upload',
+          auth: 'ok',
+          captureId: logCaptureId,
+          errno,
+          ...baseLog,
+          ipAllowed: true
+        });
+        return;
       } finally {
         if (videoPath) await fs.unlink(videoPath).catch(() => {});
         this.writing = false;
@@ -462,12 +739,15 @@ export class PalletVisionServer {
     if (req.method === 'GET' && url.pathname.startsWith('/api/pallets/')) {
       const palletId = url.pathname.split('/')[3];
       const pallet = this.pallets.find(p => p.id === palletId);
-      if (!pallet) { res.writeHead(404); res.end('Pallet not found.'); return; }
+      if (!pallet) {
+        this.respondError(res, 404, 'UNKNOWN_ROUTE', 'Pallet not found.', { ...baseLog, ipAllowed: true, auth: 'ok' });
+        return;
+      }
       json({ palletId: pallet.id, processingStatus: pallet.processingStatus, framesExtracted: pallet.framesExtracted });
       return;
     }
 
-    throw new Error('Unknown request.');
+    this.respondError(res, 404, 'UNKNOWN_ROUTE', 'Unknown API route.', { ...baseLog, ipAllowed: true, auth: 'ok' });
   }
 
   private async extractFrames(pallet: Pallet) {
@@ -506,6 +786,17 @@ export class PalletVisionServer {
       pallet.processingStatus = 'failed';
       pallet.framesExtracted = 0;
       await this.persist();
+      const net = await this.networkLogContext();
+      await this.log({
+        event: 'frame_extract',
+        outcome: 'failure',
+        errorCode: 'FRAME_EXTRACT_FAILED',
+        message: e.message,
+        errno: e.code ? String(e.code) : undefined,
+        palletId: pallet.id,
+        captureId: pallet.captureId,
+        ...net
+      });
     }
   }
 }

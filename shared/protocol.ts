@@ -2,7 +2,7 @@ export type CounterSession = { sessionId: string; value: number };
 export type Operation = 'counter.open' | 'counter.increment' | 'counter.close' | 'pallet.prepare' | 'pallet.preview' | 'pallet.alignment';
 export interface ToolkitAPI {
   freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open' | 'setTailscale', data?: { company?: string; date?: string; id?: string; enabled?: boolean }): Promise<FreightState>;
-  palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale' | 'update' | 'import' | 'selectVideo', data?: { id?: string; enabled?: boolean; videoPath?: string; heightInches?: number; widthInches?: number; lengthInches?: number; notes?: string; referenceId?: string; updates?: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean } }): Promise<PalletVisionState & { videoPath?: string | null }>;
+  palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale' | 'setTailscaleHttps' | 'update' | 'import' | 'selectVideo' | 'openLogsFolder' | 'exportLogs', data?: { id?: string; enabled?: boolean; videoPath?: string; heightInches?: number; widthInches?: number; lengthInches?: number; notes?: string; referenceId?: string; logFilter?: 'all' | 'failures'; updates?: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean } }): Promise<PalletVisionState & { videoPath?: string | null }>;
   updates(action: 'status' | 'check' | 'download' | 'install'): Promise<UpdateState>;
   onUpdateState(callback: (state: UpdateState) => void): () => void;
   previewPalletLabels(job: PalletPrintJob): Promise<PalletPreview>;
@@ -29,4 +29,23 @@ export type PalletPreview = { company: string; labels: string[]; labelCount: num
 
 export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; url: string; qr: string }[] };
 
-export type PalletVisionState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; qrUrl: string; qr: string; pallets: { id: string; captureId: string; heightInches: number; widthInches: number; lengthInches: number; notes?: string; referenceId?: string; capturedAt: string; deviceToken: string; folder: string; processingStatus: string; framesExtracted: number }[] };
+export type PalletVisionUploadLogEntry = { ts: string; event: string; outcome: string; message?: string; errorCode?: string; captureId?: string; clientIp?: string; auth?: string };
+
+export type PalletVisionState = {
+  root: string;
+  running: boolean;
+  error: string;
+  addresses: string[];
+  useTailscale: boolean;
+  useTailscaleHttps?: boolean;
+  httpsPort?: number;
+  httpsRunning?: boolean;
+  httpsError?: string;
+  tailscale: { available: boolean; address?: string; hostname?: string; error?: string };
+  qrUrl: string;
+  qr: string;
+  logFolder?: string;
+  uploadLogEntries?: PalletVisionUploadLogEntry[];
+  uploadLogSummary?: string[];
+  pallets: { id: string; captureId: string; heightInches: number; widthInches: number; lengthInches: number; notes?: string; referenceId?: string; capturedAt: string; deviceToken: string; folder: string; processingStatus: string; framesExtracted: number }[];
+};

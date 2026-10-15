@@ -33,6 +33,8 @@ video { width: 100%; max-height: 400px; background: #000; border-radius: 8px; ma
 #queue { margin-top: 12px; }
 #queue .item { background: #f5f8fa; border: 1px solid #e7eaf0; border-radius: 8px; padding: 12px; margin-bottom: 8px; font-size: 11px; }
 #queue .item .status { font-weight: 600; color: #425762; }
+#queue .item .last-error { color: #8b2020; margin-top: 6px; font-size: 11px; }
+#queue .item .details { margin-top: 8px; font-size: 10px; background: #fff; border: 1px solid #e7eaf0; border-radius: 6px; padding: 8px; white-space: pre-wrap; }
 .status-pending { color: #8892a0; }
 .status-uploading { color: #0d7aa3; }
 .status-uploaded { color: #2d7a3f; }
@@ -61,6 +63,9 @@ footer { font-size: 8px; letter-spacing: 1.3px; color: #9aa4b1; border-top: 1px 
 <button id="upload-video-btn" class="secondary">Upload Existing Video</button>
 </div>
 <input type="file" id="video-file-input" accept="video/*" hidden>
+<input type="file" id="camera-capture-input" accept="video/*" capture="environment" hidden>
+<button id="test-connection" class="secondary" type="button">Test connection</button>
+<p id="connection-test-result" style="font-size: 12px; color: #7b8694; margin-top: 8px" hidden></p>
 <div id="queue"></div>
 <h2 style="margin-top: 30px">Recent Pallets</h2>
 <div id="pallets"></div>

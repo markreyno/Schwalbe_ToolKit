@@ -43,7 +43,7 @@ test.describe('PalletVision Server E2E', () => {
       '-y'
     ]);
 
-    server = new PalletVisionServer(settingsPath);
+    server = new PalletVisionServer(settingsPath, path.join(testRoot, 'logs'));
     await server.start();
 
     const status = await server.status();
@@ -71,7 +71,8 @@ test.describe('PalletVision Server E2E', () => {
     const resp = await fetch(`${baseUrl}/api/health`);
     expect(resp.status).toBe(401);
     const data = await resp.json();
-    expect(data.error).toContain('Unauthorized');
+    expect(data.code).toBe('AUTH_MISSING');
+    expect(data.message).toMatch(/Pair/i);
   });
 
   test('health endpoint works with valid token', async () => {
@@ -82,6 +83,18 @@ test.describe('PalletVision Server E2E', () => {
     const data = await resp.json();
     expect(data.status).toBe('ok');
     expect(data.palletCount).toBe(0);
+    expect(data.auth).toBe('ok');
+  });
+
+  test('logs client camera diagnostics', async () => {
+    const resp = await fetch(`${baseUrl}/api/diagnostics/client`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${deviceToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'camera', reason: 'media_devices_unavailable', message: 'Test camera unavailable' })
+    });
+    expect(resp.ok).toBe(true);
+    const entries = server.getUploadLogEntries('failures', 10);
+    expect(entries.some((e) => e.event === 'client_camera' && e.message?.includes('Test camera'))).toBe(true);
   });
 
   test('uploads video and creates pallet folder with metadata and frames', async () => {
@@ -238,6 +251,6 @@ test.describe('PalletVision Server E2E', () => {
 
     expect(resp.status).toBe(401);
     const data = await resp.json();
-    expect(data.error).toContain('Unauthorized');
+    expect(data.code).toBe('AUTH_MISSING');
   });
 });

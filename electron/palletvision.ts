@@ -3,7 +3,8 @@ import path from 'node:path';
 import { PalletVisionServer } from './palletvisionServer';
 
 export async function registerPalletVision(window: () => BrowserWindow | null) {
-  const service = new PalletVisionServer(path.join(app.getPath('userData'), 'palletvision.json'));
+  const logsDir = path.join(app.getPath('userData'), 'logs');
+  const service = new PalletVisionServer(path.join(app.getPath('userData'), 'palletvision.json'), logsDir);
   await service.start();
 
   ipcMain.handle('toolkit:palletvision', async (event, action: string, data: any) => {
@@ -21,7 +22,8 @@ export async function registerPalletVision(window: () => BrowserWindow | null) {
         properties: ['openFile'] 
       });
       const videoPath = result.canceled ? null : result.filePaths[0];
-      return { ...service.status(), videoPath };
+      const status = await service.status();
+      return { ...status, videoPath };
     }
     else if (action === 'import') {
       await service.importVideo(data?.videoPath, {
@@ -36,7 +38,20 @@ export async function registerPalletVision(window: () => BrowserWindow | null) {
       const error = await shell.openPath(service.folder(data?.id));
       if (error) throw new Error(error);
     }
+    else if (action === 'openLogsFolder') {
+      const error = await shell.openPath(service.getLogDirectory());
+      if (error) throw new Error(error);
+    }
+    else if (action === 'exportLogs') {
+      const result = await dialog.showSaveDialog(win, {
+        title: 'Export PalletVision upload log',
+        defaultPath: `palletvision-upload-log-${new Date().toISOString().slice(0, 10)}.jsonl`,
+        filters: [{ name: 'JSON Lines', extensions: ['jsonl'] }]
+      });
+      if (!result.canceled && result.filePath) await service.exportLogs(result.filePath);
+    }
     else if (action === 'setTailscale') await service.setTailscaleMode(data?.enabled);
+    else if (action === 'setTailscaleHttps') await service.setTailscaleHttpsMode(data?.enabled);
     else if (action === 'update') await service.updateMetadata(data?.id, data?.updates);
     else if (action !== 'status') throw new Error('Unsupported action.');
     

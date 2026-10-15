@@ -13,6 +13,7 @@ export function PalletVisionCollectorPage() {
   const [editForm, setEditForm] = useState<{ heightInches: string; widthInches: string; lengthInches: string; device: string; notes: string; annotationsReviewed: boolean }>({ heightInches: '', widthInches: '', lengthInches: '', device: '', notes: '', annotationsReviewed: false });
   const [importing, setImporting] = useState(false);
   const [importForm, setImportForm] = useState<{ heightInches: string; widthInches: string; lengthInches: string; notes: string; referenceId: string; videoPath: string }>({ heightInches: '', widthInches: '40', lengthInches: '48', notes: '', referenceId: '', videoPath: '' });
+  const [logFilter, setLogFilter] = useState<'failures' | 'all'>('failures');
 
   async function action(action: Parameters<typeof window.toolkit.palletvision>[0], data?: Parameters<typeof window.toolkit.palletvision>[1]) {
     setBusy(true); setError('');
@@ -133,6 +134,28 @@ export function PalletVisionCollectorPage() {
           {state?.error && <p role="alert">{state.error}</p>}
         </section>
         <section className="freight-panel">
+          <h2>Upload log</h2>
+          <p className="freight-muted">Recent phone upload failures and diagnostics (JSON lines log on this PC).</p>
+          <label style={{ fontSize: '12px' }}>Show
+            <select value={logFilter} onChange={e => setLogFilter(e.target.value as 'failures' | 'all')} style={{ marginTop: '6px' }}>
+              <option value="failures">Failures only</option>
+              <option value="all">All recent events</option>
+            </select>
+          </label>
+          <ul style={{ fontSize: '11px', lineHeight: 1.6, margin: '12px 0', paddingLeft: '18px', maxHeight: '220px', overflow: 'auto' }}>
+            {logFilter === 'failures' && !(state?.uploadLogSummary?.length) && <li>No recent failures logged.</li>}
+            {logFilter === 'failures' && state?.uploadLogSummary?.map((line, i) => <li key={i}>{line}</li>)}
+            {logFilter === 'all' && !(state?.uploadLogEntries?.length) && <li>No log entries yet.</li>}
+            {logFilter === 'all' && state?.uploadLogEntries?.map((entry, i) => (
+              <li key={i}>{new Date(entry.ts).toLocaleString()}: {entry.message || entry.event} ({entry.outcome})</li>
+            ))}
+          </ul>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button type="button" disabled={busy} style={{ width: 'auto', flex: 1 }} onClick={() => void action('openLogsFolder')}>Open log folder</button>
+            <button type="button" disabled={busy} style={{ width: 'auto', flex: 1, background: '#d4ebf8', color: '#080a0b' }} onClick={() => void action('exportLogs')}>Export log</button>
+          </div>
+        </section>
+        <section className="freight-panel">
           <h2>Collected Pallets</h2>
           {!state?.pallets.length ? <p>No pallets collected yet.</p> : <table style={{ width: '100%', fontSize: '12px', marginTop: '12px' }}>
             <thead style={{ textAlign: 'left', borderBottom: '1px solid #e7eaf0' }}>
@@ -248,6 +271,13 @@ export function PalletVisionCollectorPage() {
         <label>Network mode<select value={state?.useTailscale ? 'tailscale' : 'local'} onChange={e => void action('setTailscale', { enabled: e.target.value === 'tailscale' })} disabled={busy}><option value="local">Local network</option><option value="tailscale">Tailscale</option></select></label>
         {state?.useTailscale && state.tailscale.error && <p role="alert" className="freight-error">{state.tailscale.error}. Using local network instead.</p>}
         {state?.useTailscale && state.tailscale.available && <p className="freight-muted">Using Tailscale: {state.tailscale.hostname || state.tailscale.address}</p>}
+        {state?.useTailscale && <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!state.useTailscaleHttps} disabled={busy} onChange={e => void action('setTailscaleHttps', { enabled: e.target.checked })} />
+          Use HTTPS (Tailscale cert) for live in-browser camera preview
+        </label>}
+        {state?.useTailscaleHttps && state.httpsRunning && <p className="freight-muted">HTTPS server on port {state.httpsPort}. Phone URL uses https:// so Record can use live preview.</p>}
+        {state?.useTailscaleHttps && state.httpsError && <p role="alert" className="freight-error">{state.httpsError}. Requires Tailscale CLI and permission to run <code>tailscale cert</code> for your MagicDNS name.</p>}
+        {state?.useTailscaleHttps && !state.httpsRunning && !state.httpsError && <p className="freight-muted">Starting HTTPS… If live preview is not required, leave this off — Record still works via the native camera app over HTTP.</p>}
         {qr && <img src={qr} alt="Scan to open PalletVision on your phone"/>}
         {!state?.useTailscale && <label>Desktop network address<select value={address || state?.addresses[0] || ''} onChange={e => setAddress(e.target.value)}>{state?.addresses.map(a => <option key={a}>{a}</option>)}</select></label>}
         <input aria-label="Phone pairing link" readOnly value={url}/>
