@@ -11,10 +11,7 @@ import { mobilePage } from './freightMobile';
 
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
-<<<<<<< HEAD
   if (ip.startsWith('fd7a:115c:a1e0:')) return true;
-=======
->>>>>>> cursor/palletvision-data-collector-eb81
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
   if (parts[0] === 127) return true;
@@ -22,7 +19,6 @@ function isPrivateIP(ip: string): boolean {
   if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
   if (parts[0] === 192 && parts[1] === 168) return true;
   if (parts[0] === 169 && parts[1] === 254) return true;
-<<<<<<< HEAD
   if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
   return false;
 }
@@ -41,12 +37,6 @@ async function detectTailscale(): Promise<{ address?: string; hostname?: string;
     return { error: 'Tailscale detection failed: ' + e.message };
   }
 }
-
-=======
-  return false;
-}
-
->>>>>>> cursor/palletvision-data-collector-eb81
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number };
 type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; expires: number };
