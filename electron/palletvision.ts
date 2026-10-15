@@ -19,6 +19,7 @@ export async function registerPalletVision(window: () => BrowserWindow | null) {
       if (error) throw new Error(error);
     }
     else if (action === 'setTailscale') await service.setTailscaleMode(data?.enabled);
+    else if (action === 'update') await service.updateMetadata(data?.id, data?.updates);
     else if (action !== 'status') throw new Error('Unsupported action.');
     
     return service.status();

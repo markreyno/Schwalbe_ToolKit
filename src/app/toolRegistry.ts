@@ -1,8 +1,8 @@
 import { Camera, Tally5, Printer, Shuffle, Forklift, Video, type LucideIcon } from 'lucide-react';
-export type Tool = { id: string; name: string; description: string; icon: LucideIcon; route?: '/tools/freight-pictures' | '/tools/counter' | '/tools/pallet' | '/tools/raffle' | '/tools/picker-water' | '/tools/palletvision'; available: boolean; category: string };
+export type Tool = { id: string; name: string; description: string; icon: LucideIcon; route?: '/tools/freight-pictures' | '/tools/counter' | '/tools/pallet' | '/tools/raffle' | '/tools/picker-water' | '/tools/palletvision-collector'; available: boolean; category: string };
 export const tools: Tool[] = [
   { id: 'freight-pictures', name: 'Freight Pictures', description: 'Collect one picture per pallet from your phone over the local network.', icon: Camera, route: '/tools/freight-pictures', available: true, category: 'Shipping & warehouse' },
-  { id: 'palletvision', name: 'PalletVision', description: 'Collect training data: record pallet videos and enter measured dimensions.', icon: Video, route: '/tools/palletvision', available: true, category: 'Data collection' },
+  { id: 'palletvision-collector', name: 'PalletVision Data Collector', description: 'Collect training data: record pallet videos and enter measured dimensions.', icon: Video, route: '/tools/palletvision-collector', available: true, category: 'Data collection' },
   { id: 'uline-raffle', name: 'Uline Raffle', description: 'Keep your list of names and pick a winner at random.', icon: Shuffle, route: '/tools/raffle', available: true, category: 'Everyday essentials' },
   { id: 'counter', name: 'Counter', description: 'Keep a tally with a single tap. A fresh start, every time.', icon: Tally5, route: '/tools/counter', available: true, category: 'Everyday essentials' },
   { id: 'pallet-label-printer', name: 'Pallet Label Printer', description: 'Create clear, consistent labels for your next shipment.', icon: Printer, route: '/tools/pallet', available: true, category: 'Shipping & warehouse' },

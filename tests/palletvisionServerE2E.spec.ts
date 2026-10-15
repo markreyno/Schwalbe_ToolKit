@@ -74,7 +74,10 @@ test.describe('PalletVision Server E2E', () => {
 
     const uploadResp = await fetch(`${baseUrl}/api/pallets/upload`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${deviceToken}` },
+      headers: { 
+        'Authorization': `Bearer ${deviceToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15'
+      },
       body: formData
     });
 
@@ -99,6 +102,9 @@ test.describe('PalletVision Server E2E', () => {
     expect(metadata.height_inches).toBe(84.5);
     expect(metadata.width_inches).toBe(42);
     expect(metadata.length_inches).toBe(50);
+    expect(metadata.device).toBe('iPhone');
+    expect(metadata.frames_extracted).toBe(0);
+    expect(metadata.annotations_reviewed).toBe(false);
     expect(metadata.notes).toBe('End-to-end test pallet');
     expect(metadata.reference_id).toBe('E2E-TEST-001');
     expect(metadata.video_file).toBe('video.webm');

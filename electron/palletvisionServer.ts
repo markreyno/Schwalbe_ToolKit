@@ -114,6 +114,38 @@ export class PalletVisionServer {
 
   folder(id: string) { const p = this.pallets.find(p => p.id === id); if (!p) throw new Error('Pallet not found.'); return p.folder; }
 
+  async updateMetadata(id: string, updates: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean }) {
+    const pallet = this.pallets.find(p => p.id === id);
+    if (!pallet) throw new Error('Pallet not found.');
+    
+    if (updates.heightInches !== undefined) {
+      if (updates.heightInches <= 0) throw new Error('Height must be positive.');
+      pallet.heightInches = updates.heightInches;
+    }
+    if (updates.widthInches !== undefined) {
+      if (updates.widthInches <= 0) throw new Error('Width must be positive.');
+      pallet.widthInches = updates.widthInches;
+    }
+    if (updates.lengthInches !== undefined) {
+      if (updates.lengthInches <= 0) throw new Error('Length must be positive.');
+      pallet.lengthInches = updates.lengthInches;
+    }
+    if (updates.notes !== undefined) pallet.notes = updates.notes;
+    
+    const metadataPath = path.join(pallet.folder, 'metadata.json');
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+    
+    if (updates.heightInches !== undefined) metadata.height_inches = updates.heightInches;
+    if (updates.widthInches !== undefined) metadata.width_inches = updates.widthInches;
+    if (updates.lengthInches !== undefined) metadata.length_inches = updates.lengthInches;
+    if (updates.device !== undefined) metadata.device = updates.device;
+    if (updates.notes !== undefined) metadata.notes = updates.notes;
+    if (updates.annotationsReviewed !== undefined) metadata.annotations_reviewed = updates.annotationsReviewed;
+    
+    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+    await this.persist();
+  }
+
   async status() {
     const tailscale = await detectTailscale();
     let urls: string[];
@@ -258,22 +290,28 @@ export class PalletVisionServer {
           framesExtracted: 0
         };
         
+        const userAgent = req.headers['user-agent'] || '';
+        const device = userAgent.includes('iPhone') || userAgent.includes('iPad') ? 'iPhone' :
+                      userAgent.includes('Android') ? 'Android' : 'Unknown';
+        
         const metadata = {
-          schema_version: 1,
           pallet_id: palletId,
-          capture_id: captureId,
-          captured_at: pallet.capturedAt,
           height_inches: height,
           width_inches: width,
           length_inches: length,
+          device,
+          frames_extracted: 0,
+          annotations_reviewed: false,
+          schema_version: 1,
+          capture_id: captureId,
+          captured_at: pallet.capturedAt,
           height_includes_base: true,
           notes,
           reference_id: referenceId,
           video_file: 'video.webm',
           device_token: deviceToken.slice(0, 8),
           annotation_status: 'unlabeled',
-          processing_status: 'pending',
-          frames_extracted: 0
+          processing_status: 'pending'
         };
         
         await fs.writeFile(path.join(palletFolder, 'metadata.json'), JSON.stringify(metadata, null, 2));

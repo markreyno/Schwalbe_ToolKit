@@ -2,7 +2,7 @@ export type CounterSession = { sessionId: string; value: number };
 export type Operation = 'counter.open' | 'counter.increment' | 'counter.close' | 'pallet.prepare' | 'pallet.preview' | 'pallet.alignment';
 export interface ToolkitAPI {
   freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open' | 'setTailscale', data?: { company?: string; date?: string; id?: string; enabled?: boolean }): Promise<FreightState>;
-  palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale', data?: { id?: string; enabled?: boolean }): Promise<PalletVisionState>;
+  palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale' | 'update', data?: { id?: string; enabled?: boolean; updates?: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean } }): Promise<PalletVisionState>;
   updates(action: 'status' | 'check' | 'download' | 'install'): Promise<UpdateState>;
   onUpdateState(callback: (state: UpdateState) => void): () => void;
   previewPalletLabels(job: PalletPrintJob): Promise<PalletPreview>;
