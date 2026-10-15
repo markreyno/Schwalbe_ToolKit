@@ -2,10 +2,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { createWriteStream, createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
+import busboy from 'busboy';
 import { mobilePage } from './palletvisionMobile';
 
 function isPrivateIP(ip: string): boolean {
@@ -54,14 +56,11 @@ type Pallet = {
   framesExtracted: number;
 };
 
-type Upload = { id: string; pallet: Pallet; tempPath?: string; expires: number };
-
 export class PalletVisionServer {
   private server?: http.Server;
   private root = '';
   private deviceTokens = new Map<string, { token: string; createdAt: number }>();
   private pallets: Pallet[] = [];
-  private uploads = new Map<string, Upload>();
   private port = 0;
   private preferredAddress = '';
   private useTailscale = false;
@@ -116,8 +115,6 @@ export class PalletVisionServer {
     return { root: this.root, running: !!this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), pallets: this.pallets.map(p => ({ ...p })) };
   }
 
-  private async body(req: http.IncomingMessage, max: number) { const chunks: Buffer[] = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > max) throw new Error('Upload exceeds the allowed size.'); chunks.push(chunk); } return Buffer.concat(chunks); }
-
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const clientIP = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
     if (clientIP && !isPrivateIP(clientIP)) {
@@ -134,7 +131,19 @@ export class PalletVisionServer {
     }
     const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     
-    if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(mobilePage); return; }
+    if (req.method === 'GET' && url.pathname === '/') { 
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); 
+      res.end(mobilePage); 
+      return; 
+    }
+
+    if (req.method === 'GET' && url.pathname === '/palletvisionMobile.js') {
+      const jsPath = path.join(__dirname, 'palletvisionMobile.js');
+      const jsContent = await fs.readFile(jsPath, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(jsContent);
+      return;
+    }
     
     if (req.method === 'POST' && url.pathname === '/api/pair') {
       const deviceToken = token();
@@ -156,41 +165,75 @@ export class PalletVisionServer {
 
     if (req.method === 'POST' && url.pathname === '/api/pallets/upload') {
       if (this.writing) throw new Error('Another pallet is being processed. Retry.');
-      const contentType = req.headers['content-type'] || '';
-      if (!contentType.includes('multipart/form-data')) throw new Error('Expected multipart/form-data.');
       
       this.writing = true;
       try {
-        const data = JSON.parse((await this.body(req, 500 * 1024 * 1024)).toString());
-        const { captureId, heightInches, widthInches, lengthInches, notes, referenceId, capturedAt, videoBase64 } = data;
+        const fields: Record<string, string> = {};
+        let videoPath: string | null = null;
+        let videoSize = 0;
+
+        const bb = busboy({ headers: req.headers, limits: { fileSize: 500 * 1024 * 1024 } });
+
+        bb.on('field', (name, value) => {
+          fields[name] = value;
+        });
+
+        bb.on('file', (name, file, info) => {
+          if (name !== 'video') {
+            file.resume();
+            return;
+          }
+          
+          const tempPath = path.join(os.tmpdir(), `pallet-upload-${Date.now()}.webm`);
+          videoPath = tempPath;
+          const writeStream = createWriteStream(tempPath);
+          
+          file.on('data', (chunk) => {
+            videoSize += chunk.length;
+          });
+          
+          file.pipe(writeStream);
+        });
+
+        await new Promise((resolve, reject) => {
+          bb.on('finish', resolve);
+          bb.on('error', reject);
+          req.pipe(bb);
+        });
+
+        const { captureId, heightInches, widthInches, lengthInches, notes, referenceId, capturedAt } = fields;
         
         if (!captureId || typeof captureId !== 'string') throw new Error('Missing or invalid captureId.');
         if (this.pallets.some(p => p.captureId === captureId)) {
           const existing = this.pallets.find(p => p.captureId === captureId)!;
+          if (videoPath) await fs.unlink(videoPath).catch(() => {});
           json({ palletId: existing.id, status: 'exists', processingStatus: existing.processingStatus });
           return;
         }
         
-        if (typeof heightInches !== 'number' || heightInches <= 0) throw new Error('Invalid height.');
-        if (typeof widthInches !== 'number' || widthInches <= 0) throw new Error('Invalid width.');
-        if (typeof lengthInches !== 'number' || lengthInches <= 0) throw new Error('Invalid length.');
-        if (!videoBase64 || typeof videoBase64 !== 'string') throw new Error('Missing video data.');
+        const height = parseFloat(heightInches);
+        const width = parseFloat(widthInches);
+        const length = parseFloat(lengthInches);
+        
+        if (!height || height <= 0) throw new Error('Invalid height.');
+        if (!width || width <= 0) throw new Error('Invalid width.');
+        if (!length || length <= 0) throw new Error('Invalid length.');
+        if (!videoPath || videoSize === 0) throw new Error('Missing video data.');
         
         const palletId = `pallet_${String(this.pallets.length + 1).padStart(4, '0')}`;
         const palletFolder = path.join(this.root, palletId);
         await fs.mkdir(palletFolder, { recursive: true });
         await fs.mkdir(path.join(palletFolder, 'frames'), { recursive: true });
         
-        const videoPath = path.join(palletFolder, 'video.mp4');
-        const videoBuffer = Buffer.from(videoBase64, 'base64');
-        await fs.writeFile(videoPath, videoBuffer);
+        const finalVideoPath = path.join(palletFolder, 'video.webm');
+        await fs.rename(videoPath, finalVideoPath);
         
         const pallet: Pallet = {
           id: palletId,
           captureId,
-          heightInches,
-          widthInches,
-          lengthInches,
+          heightInches: height,
+          widthInches: width,
+          lengthInches: length,
           notes,
           referenceId,
           capturedAt: capturedAt || new Date().toISOString(),
@@ -205,13 +248,13 @@ export class PalletVisionServer {
           pallet_id: palletId,
           capture_id: captureId,
           captured_at: pallet.capturedAt,
-          height_inches: heightInches,
-          width_inches: widthInches,
-          length_inches: lengthInches,
+          height_inches: height,
+          width_inches: width,
+          length_inches: length,
           height_includes_base: true,
           notes,
           reference_id: referenceId,
-          video_file: 'video.mp4',
+          video_file: 'video.webm',
           device_token: deviceToken.slice(0, 8),
           annotation_status: 'unlabeled',
           processing_status: 'pending',
@@ -246,7 +289,7 @@ export class PalletVisionServer {
       pallet.processingStatus = 'extracting';
       await this.persist();
       
-      const videoPath = path.join(pallet.folder, 'video.mp4');
+      const videoPath = path.join(pallet.folder, 'video.webm');
       const framesDir = path.join(pallet.folder, 'frames');
       
       const targetFrames = 15;
