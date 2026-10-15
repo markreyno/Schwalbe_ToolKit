@@ -87,6 +87,10 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
       body: formData
     });
 
+    if (!uploadResp.ok) {
+      const errorText = await uploadResp.text();
+      throw new Error(`Upload failed with ${uploadResp.status}: ${errorText}`);
+    }
     expect(uploadResp.ok).toBe(true);
     const uploadData = await uploadResp.json();
     expect(uploadData.palletId).toMatch(/pallet_\d{4}/);
