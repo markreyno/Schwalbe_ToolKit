@@ -365,7 +365,8 @@ export class PalletVisionServer {
         
         const videoExt = (videoPath as string).endsWith('.mp4') ? 'mp4' : 'webm';
         const finalVideoPath = path.join(palletFolder, `video.${videoExt}`);
-        await fs.rename(videoPath as string, finalVideoPath);
+        await fs.copyFile(videoPath as string, finalVideoPath);
+        await fs.unlink(videoPath as string).catch(() => {});
         
         const pallet: Pallet = {
           id: palletId,
