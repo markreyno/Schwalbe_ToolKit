@@ -48,7 +48,27 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     expect(pairData.deviceToken).toBeTruthy();
     const deviceToken = pairData.deviceToken;
 
-    const testVideoPath = path.join(process.cwd(), 'test-pallet-video.webm');
+    // Generate test video at runtime
+    const testVideoPath = path.join(profile, 'test-pallet-video.webm');
+    const getFFmpegPath = (): string => {
+      try {
+        const ffmpegStatic = require('ffmpeg-static');
+        if (typeof ffmpegStatic === 'string') {
+          return ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
+        }
+        return ffmpegStatic;
+      } catch {
+        return 'ffmpeg';
+      }
+    };
+    await promisify(execFile)(getFFmpegPath(), [
+      '-f', 'lavfi',
+      '-i', 'testsrc=duration=5:size=640x480:rate=30',
+      '-pix_fmt', 'yuv420p',
+      '-c:v', 'libvpx',
+      testVideoPath,
+      '-y'
+    ]);
     const videoBuffer = await readFile(testVideoPath);
 
     const formData = new FormData();
