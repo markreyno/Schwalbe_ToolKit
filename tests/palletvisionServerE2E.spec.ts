@@ -7,6 +7,18 @@ import { access } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+function getFFmpegPath(): string {
+  try {
+    const ffmpegStatic = require('ffmpeg-static');
+    if (typeof ffmpegStatic === 'string') {
+      return ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
+    }
+    return ffmpegStatic;
+  } catch {
+    return 'ffmpeg';
+  }
+}
+
 test.describe('PalletVision Server E2E', () => {
   let server: PalletVisionServer;
   let testRoot: string;
@@ -22,7 +34,7 @@ test.describe('PalletVision Server E2E', () => {
 
     // Generate test video at runtime
     testVideoPath = path.join(testRoot, 'test-video.webm');
-    await promisify(execFile)('ffmpeg', [
+    await promisify(execFile)(getFFmpegPath(), [
       '-f', 'lavfi',
       '-i', 'testsrc=duration=5:size=640x480:rate=30',
       '-pix_fmt', 'yuv420p',
