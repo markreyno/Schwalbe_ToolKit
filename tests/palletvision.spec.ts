@@ -235,6 +235,80 @@ test('palletvision mobile upload existing video', async ({ browser }) => {
   }
 });
 
+test('palletvision mobile cancel upload cleans up and allows retry', async ({ browser }) => {
+  const profile = path.resolve('.cache/palletvision-tests', randomUUID());
+  const storage = path.join(profile, 'data');
+  await mkdir(storage, { recursive: true });
+
+  const env: Record<string, string> = {
+    ...Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)),
+    TOOLKIT_TEST_DATA: profile
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  let app = await electron.launch({
+    ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }),
+    env
+  });
+
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }, storage) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [storage] })) as any;
+    }, storage);
+
+    await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
+    await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
+
+    let state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    const palletsBefore = state.pallets.length;
+    const local = (url: string) => url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48732');
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    let slowUpload = true;
+    await mobile.route('**/api/pallets/upload', async (route) => {
+      if (slowUpload) await new Promise(resolve => setTimeout(resolve, 2500));
+      await route.continue().catch(() => {});
+    });
+    await mobile.goto(local(state.qrUrl));
+
+    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair'));
+    await expect(mobile.getByRole('heading', { name: 'PalletVision Data Collector' })).toBeVisible();
+    await pairReq;
+
+    const testVideoPath = path.join(__dirname, 'fixtures', 'test-pallet.webm');
+    const videoBuffer = await readFile(testVideoPath);
+
+    await mobile.getByRole('button', { name: 'Upload Existing Video' }).click();
+    await mobile.locator('#video-file-input').setInputFiles({ name: 'test-video.webm', mimeType: 'video/webm', buffer: videoBuffer });
+    await mobile.getByRole('button', { name: 'Continue' }).click();
+    await mobile.locator('#height').fill('70');
+    await mobile.getByRole('button', { name: 'Save & Upload' }).click();
+
+    await expect(mobile.locator('#cancel-upload')).toBeVisible({ timeout: 5000 });
+    await mobile.locator('#cancel-upload').click();
+    await expect(mobile.locator('#message')).toContainText('Upload canceled', { timeout: 10000 });
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    expect(state.pallets.length).toBe(palletsBefore);
+
+    const fs = await import('node:fs/promises');
+    const tmpEntries = await fs.readdir(path.join(storage, '.tmp')).catch(() => [] as string[]);
+    expect(tmpEntries.filter((f) => f.startsWith('upload-'))).toHaveLength(0);
+
+    slowUpload = false;
+    await mobile.getByRole('button', { name: 'Upload now' }).click();
+    await new Promise(resolve => setTimeout(resolve, 4000));
+
+    state = await page.evaluate(() => window.toolkit.palletvision('status'));
+    expect(state.pallets.length).toBe(palletsBefore + 1);
+
+    await mobile.close();
+  } finally {
+    await app.close();
+  }
+});
+
 test('palletvision desktop import video', async () => {
   const profile = path.resolve('.cache/palletvision-tests', randomUUID());
   const storage = path.join(profile, 'data');
