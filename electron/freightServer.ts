@@ -9,6 +9,9 @@ import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import { mobilePage } from './freightMobile';
 
+/** In-memory upload batch lock duration; overridable in tests via FREIGHT_BATCH_TTL_MS. */
+export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0 ? Number(process.env.FREIGHT_BATCH_TTL_MS) : 60000;
+
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
   if (ip.startsWith('fd7a:115c:a1e0:')) return true;
@@ -74,6 +77,20 @@ export class FreightServer {
     return next;
   }
   async setRoot(root: string) { if ((this.batch && this.batch.expires > Date.now()) || this.writing) throw new Error('Finish the active upload first.'); await fs.access(root); this.root = root; await this.persist(); }
+  private async abandonBatch() {
+    const batch = this.batch;
+    this.batch = undefined;
+    if (!batch) return;
+    const prefix = `_${batch.id.slice(0, 8)}_`;
+    for (const f of batch.files) {
+      if (f.saved) { try { await fs.unlink(f.saved); } catch { /* already removed */ } f.saved = undefined; }
+    }
+    try {
+      for (const name of await fs.readdir(batch.shipment.folder)) {
+        if (name.includes(prefix) && name.endsWith('.part')) await fs.unlink(path.join(batch.shipment.folder, name));
+      }
+    } catch { /* folder may be missing */ }
+  }
   async create(company: string, date: string) {
     if (!this.root) throw new Error('Choose the desktop storage folder first.');
     if (typeof company !== 'string' || !company.trim() || company.length > 100 || /[<>:"/\\|?*\x00-\x1f]/.test(company) || /[. ]$/.test(company) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(date).toISOString().slice(0,10) !== date) throw new Error('Enter a valid company and shipment date. Avoid special characters in the company name.');
@@ -126,27 +143,36 @@ export class FreightServer {
     if (req.method === 'POST' && url.pathname === '/create' && master) { const data = JSON.parse((await this.body(req, 4096)).toString()); const s = await this.create(data.company, data.date); json({ key: s.token }); return; }
     if (!shipment || shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
     if (req.method === 'POST' && url.pathname === '/batch') {
-      if (this.batch && this.batch.expires > Date.now()) throw new Error('An upload is already active. Retry the current batch or wait 10 minutes.');
+      if (this.batch && this.batch.expires > Date.now()) throw new Error('An upload is already active. Retry the current batch or wait 1 minute.');
       const data = JSON.parse((await this.body(req, 100000)).toString());
       if (!Array.isArray(data.files) || data.files.length < 1 || data.files.length > MAX_FREIGHT_PICTURES || data.pallets !== data.files.length) throw new Error('Select 1 to 26 pictures and confirm one picture per pallet.');
       for (const f of data.files) if (typeof f.name !== 'string' || !/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(f.name) || !Number.isInteger(f.size) || f.size < 1 || f.size > 100 * 1024 * 1024 || (f.hash !== undefined && !/^[a-f0-9]{64}$/.test(f.hash))) throw new Error('Choose image files up to 100 MB each.');
-      this.batch = { id: token(), shipment, files: data.files, expires: Date.now() + 600000 }; json({ id: this.batch.id }); return;
+      this.batch = { id: token(), shipment, files: data.files, expires: Date.now() + FREIGHT_BATCH_TTL_MS }; json({ id: this.batch.id }); return;
     }
     const batch = this.batch;
     if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
-    batch.expires = Date.now() + 600000;
+    batch.expires = Date.now() + FREIGHT_BATCH_TTL_MS;
+    if (req.method === 'POST' && url.pathname === '/cancel') { await this.abandonBatch(); json({ canceled: true }); return; }
     if (req.method === 'POST' && url.pathname === '/file') {
       if (this.writing) throw new Error('Another picture is being saved. Retry.');
       const index = Number(url.searchParams.get('index')); const f = batch.files[index]; if (!Number.isInteger(index) || !f) throw new Error('Invalid picture.');
+      let clientAborted = false;
+      const markAborted = () => { clientAborted = true; };
+      req.once('aborted', markAborted);
       this.writing = true;
       try {
         const expectedHash = f.hash ?? req.headers['x-picture-sha256'];
         if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Picture checksum is required. Retry.');
-        const bytes = await this.body(req, f.size); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
-        try { validateFreightImage(bytes, f.name); } catch (e) { this.batch = undefined; throw e; }
+        const bytes = await this.body(req, f.size);
+        if (clientAborted || req.aborted) { await this.abandonBatch(); return; }
+        if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
+        try { validateFreightImage(bytes, f.name); } catch (e) { await this.abandonBatch(); throw e; }
         f.hash = expectedHash;
         if (!f.saved) { const target = path.join(shipment.folder, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${path.extname(f.name).toLowerCase()}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
         json({ saved: true });
+      } catch (e) {
+        if (clientAborted || req.aborted) { await this.abandonBatch(); return; }
+        throw e;
       } finally { this.writing = false; } return;
     }
     if (req.method === 'POST' && url.pathname === '/finish') {
