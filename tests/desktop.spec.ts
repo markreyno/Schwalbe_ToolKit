@@ -1,6 +1,8 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 let app: ElectronApplication;
 let testProfile: string;
@@ -12,6 +14,19 @@ test.beforeEach(async () => {
   app = await electron.launch({ ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }), env });
 });
 test.afterEach(async () => { await app?.close(); });
+
+test('opening a second copy keeps the original upload server and exits cleanly', async () => {
+  const page = await app.firstWindow();
+  const before = await page.evaluate(() => window.toolkit.palletvision('status'));
+  expect(before.running).toBe(true);
+  const env: NodeJS.ProcessEnv = { ...process.env, TOOLKIT_TEST_DATA: testProfile };
+  delete env.ELECTRON_RUN_AS_NODE;
+  await promisify(execFile)(process.env.TOOLKIT_EXECUTABLE || require('electron'),
+    process.env.TOOLKIT_EXECUTABLE ? [] : ['.'], { env, timeout: 15000, windowsHide: true });
+  const after = await page.evaluate(() => window.toolkit.palletvision('status'));
+  expect(after.running).toBe(true);
+  expect(app.windows()).toHaveLength(1);
+});
 
 test('desktop counter counts rapid presses, resets on reopen and reload, and supports keyboard', async () => {
   const page = await app.firstWindow();

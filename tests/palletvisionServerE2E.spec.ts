@@ -144,6 +144,7 @@ test.describe('PalletVision Server E2E', () => {
     const status = await server.status();
     const pallet = status.pallets.find(p => p.id === palletId);
     expect(pallet).toBeTruthy();
+    expect(pallet?.processingStatus).toBe('complete');
     if (pallet?.processingStatus === 'complete') {
       expect(pallet.framesExtracted).toBeGreaterThan(0);
 
@@ -156,6 +157,7 @@ test.describe('PalletVision Server E2E', () => {
       const metadataUpdated = JSON.parse(await fs.readFile(path.join(palletFolder, 'metadata.json'), 'utf8'));
       expect(metadataUpdated.processing_status).toBe('complete');
       expect(metadataUpdated.frames_extracted).toBe(frames.length);
+      expect(metadataUpdated.frame_sampling.strategy).toBe('uniform_full_video');
     } else {
       console.log('Frame extraction still in progress or failed:', pallet?.processingStatus);
     }

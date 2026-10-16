@@ -30,6 +30,14 @@ function createWindow() {
   else void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), process.argv.includes('--freight-pictures') ? { hash: '/tools/freight-pictures' } : {});
 }
 
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+app.on('second-instance', () => {
+  if (mainWindow?.isMinimized()) mainWindow.restore();
+  mainWindow?.show();
+  mainWindow?.focus();
+});
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.schwalbe.toolkit');
   const command = app.isPackaged ? path.join(process.resourcesPath, 'python', 'toolkit-backend.exe') : (process.env.PYTHON_PATH || 'python');
@@ -49,5 +57,6 @@ app.whenReady().then(async () => {
   createWindow();
   app.on('activate', () => { if (!mainWindow) createWindow(); });
 });
+}
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', () => bridge?.stop());

@@ -8,6 +8,7 @@ import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import busboy from 'busboy';
+import { extractPalletVideoFrames } from './palletvisionFrames';
 
 function getFFmpegPath(): string {
   try {
@@ -483,22 +484,16 @@ export class PalletVisionServer {
       
       const targetFrames = 15;
       const ffmpegPath = getFFmpegPath();
-      const ffmpegArgs = [
-        '-i', videoPath,
-        '-vf', `select='not(mod(n\\,5))',scale=640:-1`,
-        '-frames:v', String(targetFrames),
-        '-q:v', '2',
-        path.join(framesDir, 'frame_%04d.jpg')
-      ];
+      const sampling = await extractPalletVideoFrames(ffmpegPath, videoPath, framesDir, targetFrames);
       
-      await promisify(execFile)(ffmpegPath, ffmpegArgs, { timeout: 60000 });
-      
-      const frames = await fs.readdir(framesDir);
+      const frames = (await fs.readdir(framesDir)).filter(name => /^frame_\d+\.jpg$/.test(name));
+      if (!frames.length) throw new Error('No video frames could be extracted.');
       pallet.framesExtracted = frames.length;
       pallet.processingStatus = 'complete';
       
       metadata.frames_extracted = frames.length;
       metadata.processing_status = 'complete';
+      metadata.frame_sampling = sampling;
       await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
       
       await this.persist();
