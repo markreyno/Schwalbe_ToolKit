@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import http from 'node:http';
 import fs from 'node:fs/promises';
-import { createWriteStream, createReadStream, readFileSync } from 'node:fs';
+import { createWriteStream, readFileSync, type WriteStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
@@ -97,6 +97,7 @@ export class PalletVisionServer {
   private error = '';
   private writing = false;
   private persistence: Promise<void> = Promise.resolve();
+  private events: { type: 'upload_canceled'; captureId?: string; at: string }[] = [];
 
   constructor(private settings: string) {}
 
@@ -276,7 +277,7 @@ export class PalletVisionServer {
       urls = addresses.map(a => `http://${a}:${this.port}`);
     }
     const base = urls[0] || `http://127.0.0.1:${this.port}`;
-    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), pallets: this.pallets.map(p => ({ ...p })) };
+    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), events: this.events.map(e => ({ ...e })), pallets: this.pallets.map(p => ({ ...p })) };
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -332,13 +333,64 @@ export class PalletVisionServer {
       
       this.writing = true;
       let videoPath: string | null = null;
+      let clientAborted = false;
+      let cancellationLogged = false;
+      let uploadResponded = false;
+      let videoWriteStream: WriteStream | null = null;
+      let busboyParser: ReturnType<typeof busboy> | null = null;
+      const fields: Record<string, string> = {};
+
+      const recordCancellation = () => {
+        if (cancellationLogged) return;
+        cancellationLogged = true;
+        const event = { type: 'upload_canceled' as const, captureId: fields.captureId, at: new Date().toISOString() };
+        this.events.unshift(event);
+        if (this.events.length > 20) this.events.length = 20;
+        console.log('[PalletVision] Upload canceled by client', fields.captureId ? `(captureId=${fields.captureId})` : '');
+      };
+
+      const cleanupStaging = async () => {
+        if (videoPath) {
+          await fs.unlink(videoPath).catch(() => {});
+          videoPath = null;
+        }
+      };
+
+      const isConnectionAbortError = (err: unknown) => {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        const message = err instanceof Error ? err.message : String(err);
+        return code === 'ECONNRESET' || code === 'EPIPE' || code === 'ERR_STREAM_PREMATURE_CLOSE'
+          || /aborted|unexpected end|truncated|premature close|unexpected end of form/i.test(message);
+      };
+
+      const respondCanceled = () => {
+        if (res.headersSent) return;
+        recordCancellation();
+        res.writeHead(499, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ status: 'canceled' }));
+        uploadResponded = true;
+      };
+
+      const onClientAbort = () => {
+        if (clientAborted) return;
+        clientAborted = true;
+        if (busboyParser) req.unpipe(busboyParser);
+        busboyParser?.removeAllListeners();
+        busboyParser?.destroy();
+        videoWriteStream?.destroy();
+        void cleanupStaging();
+        respondCanceled();
+      };
+
       try {
         await this.ensureStagingDir();
-        const fields: Record<string, string> = {};
         let videoSize = 0;
         let videoWriteDone: Promise<void> | null = null;
 
-        const bb = busboy({ headers: req.headers, limits: { fileSize: 500 * 1024 * 1024 } });
+        busboyParser = busboy({ headers: req.headers, limits: { fileSize: 500 * 1024 * 1024 } });
+        const bb = busboyParser;
+
+        req.on('aborted', onClientAbort);
 
         bb.on('field', (name, value) => {
           fields[name] = value;
@@ -353,27 +405,50 @@ export class PalletVisionServer {
           const ext = info.filename?.endsWith('.mp4') ? 'mp4' : 'webm';
           const tempPath = this.newStagingPath(ext, 'upload');
           videoPath = tempPath;
-          const writeStream = createWriteStream(tempPath);
+          videoWriteStream = createWriteStream(tempPath);
           
           file.on('data', (chunk) => {
-            videoSize += chunk.length;
+            if (!clientAborted) videoSize += chunk.length;
+          });
+
+          file.on('limit', () => {
+            file.resume();
           });
           
           videoWriteDone = new Promise<void>((resolve, reject) => {
-            writeStream.on('finish', () => resolve());
-            writeStream.on('error', reject);
-            file.on('error', reject);
+            videoWriteStream!.on('finish', () => resolve());
+            videoWriteStream!.on('error', (err) => {
+              if (clientAborted) resolve();
+              else reject(err);
+            });
+            file.on('error', (err) => {
+              if (clientAborted) resolve();
+              else reject(err);
+            });
           });
           
-          file.pipe(writeStream);
+          file.pipe(videoWriteStream);
         });
 
-        await new Promise((resolve, reject) => {
-          bb.on('finish', resolve);
-          bb.on('error', reject);
+        await new Promise<void>((resolve, reject) => {
+          bb.on('finish', () => resolve());
+          bb.on('error', (err) => {
+            if (clientAborted || isConnectionAbortError(err)) {
+              onClientAbort();
+              resolve();
+            } else reject(err);
+          });
           req.pipe(bb);
         });
+        if (clientAborted) {
+          await cleanupStaging();
+          return;
+        }
         if (videoWriteDone) await videoWriteDone;
+        if (clientAborted) {
+          await cleanupStaging();
+          return;
+        }
 
         const { captureId, heightInches, widthInches, lengthInches, notes, referenceId, capturedAt } = fields;
         
@@ -381,6 +456,7 @@ export class PalletVisionServer {
         if (this.pallets.some(p => p.captureId === captureId)) {
           const existing = this.pallets.find(p => p.captureId === captureId)!;
           if (videoPath) await fs.unlink(videoPath).catch(() => {});
+          uploadResponded = true;
           json({ palletId: existing.id, status: 'exists', processingStatus: existing.processingStatus });
           return;
         }
@@ -452,9 +528,17 @@ export class PalletVisionServer {
         
         void this.extractFrames(pallet);
         
+        uploadResponded = true;
         json({ palletId, status: 'uploaded', processingStatus: 'pending' });
+      } catch (e) {
+        if (clientAborted || isConnectionAbortError(e)) {
+          onClientAbort();
+          await cleanupStaging();
+          return;
+        }
+        throw e;
       } finally {
-        if (videoPath) await fs.unlink(videoPath).catch(() => {});
+        if (!clientAborted && videoPath) await fs.unlink(videoPath).catch(() => {});
         this.writing = false;
       }
       return;

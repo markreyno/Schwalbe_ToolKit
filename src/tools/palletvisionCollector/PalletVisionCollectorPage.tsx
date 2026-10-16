@@ -131,6 +131,15 @@ export function PalletVisionCollectorPage() {
           </div>
           <p className="freight-muted">{state?.running ? 'Upload server is running on port 48732.' : 'Upload server is unavailable.'} Keep the toolkit open.</p>
           {state?.error && <p role="alert">{state.error}</p>}
+          {state?.events?.length ? <div style={{ marginTop: '12px', fontSize: '11px', color: '#7b8694' }}>
+            <p style={{ fontWeight: 600, marginBottom: '6px' }}>Activity log</p>
+            <ul style={{ margin: 0, paddingLeft: '18px' }}>
+              {state.events.slice(0, 5).map((evt, i) => <li key={evt.at + String(i)}>
+                {evt.type === 'upload_canceled' ? `Upload canceled${evt.captureId ? ` (${evt.captureId})` : ''}` : evt.type}
+                {' · '}{new Date(evt.at).toLocaleTimeString()}
+              </li>)}
+            </ul>
+          </div> : null}
         </section>
         <section className="freight-panel">
           <h2>Collected Pallets</h2>

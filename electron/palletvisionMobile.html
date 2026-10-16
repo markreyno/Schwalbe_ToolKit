@@ -37,6 +37,11 @@ video { width: 100%; max-height: 400px; background: #000; border-radius: 8px; ma
 .status-uploading { color: #0d7aa3; }
 .status-uploaded { color: #2d7a3f; }
 .status-failed { color: #8b2020; }
+.status-canceled { color: #8892a0; }
+#upload-active { margin-top: 16px; }
+#upload-progress-track { height: 8px; background: #e7eaf0; border-radius: 4px; overflow: hidden; margin: 12px 0; }
+#upload-progress-fill { height: 100%; width: 0%; background: #0d7aa3; transition: width 0.15s ease; }
+#upload-progress-label { font-size: 11px; color: #7b8694; }
 #camera-preview { display: none; }
 footer { font-size: 8px; letter-spacing: 1.3px; color: #9aa4b1; border-top: 1px solid #e3e8ef; padding: 18px 0; margin-top: 28px; }
 [hidden] { display: none !important; }
@@ -61,6 +66,11 @@ footer { font-size: 8px; letter-spacing: 1.3px; color: #9aa4b1; border-top: 1px 
 <button id="upload-video-btn" class="secondary">Upload Existing Video</button>
 </div>
 <input type="file" id="video-file-input" accept="video/*" hidden>
+<div id="upload-active" hidden>
+<p id="upload-progress-label">Uploading…</p>
+<div id="upload-progress-track"><div id="upload-progress-fill"></div></div>
+<button type="button" id="cancel-upload" class="secondary">Cancel upload</button>
+</div>
 <div id="queue"></div>
 <h2 style="margin-top: 30px">Recent Pallets</h2>
 <div id="pallets"></div>

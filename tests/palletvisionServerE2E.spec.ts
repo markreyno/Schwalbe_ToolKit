@@ -4,6 +4,7 @@ import { readFile, mkdir, rm, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
+import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -220,6 +221,90 @@ test.describe('PalletVision Server E2E', () => {
       const data = await resp.json();
       expect(data.error).toBeTruthy();
     }
+  });
+
+  async function abortUploadMidStream(captureId: string) {
+    const videoBuffer = await readFile(testVideoPath);
+    const boundary = '----PalletVisionAbortTest';
+    const chunks: Buffer[] = [];
+    const field = (name: string, value: string) => {
+      chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+    };
+    field('captureId', captureId);
+    field('heightInches', '74');
+    field('widthInches', '40');
+    field('lengthInches', '48');
+    field('capturedAt', new Date().toISOString());
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="test.webm"\r\nContent-Type: video/webm\r\n\r\n`));
+    const header = Buffer.concat(chunks);
+    const partialVideo = videoBuffer.subarray(0, Math.min(videoBuffer.length, 96 * 1024));
+
+    await new Promise<void>((resolve) => {
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port: 48732,
+        path: '/api/pallets/upload',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${deviceToken}`,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        },
+      });
+      req.on('error', () => resolve());
+      req.on('close', () => resolve());
+      req.write(header);
+      req.write(partialVideo);
+      req.destroy();
+    });
+    await new Promise(resolve => setTimeout(resolve, 1200));
+  }
+
+  test('aborted mid-upload cleans up staging and allows a follow-up upload', async () => {
+    const captureId = `cap_abort_${randomUUID()}`;
+    const palletsBefore = (await server.status()).pallets.length;
+
+    await abortUploadMidStream(captureId);
+
+    const statusAfterAbort = await server.status();
+    expect(statusAfterAbort.pallets.filter(p => p.captureId === captureId)).toHaveLength(0);
+    expect(statusAfterAbort.pallets.length).toBe(palletsBefore);
+    const tmpEntries = await readdir(path.join(testRoot, '.tmp')).catch(() => [] as string[]);
+    expect(tmpEntries.filter(f => f.startsWith('upload-'))).toHaveLength(0);
+
+    const rootEntries = await readdir(testRoot);
+    for (const entry of rootEntries) {
+      if (!entry.startsWith('pallet_')) continue;
+      const metaPath = path.join(testRoot, entry, 'metadata.json');
+      try {
+        const meta = JSON.parse(await readFile(metaPath, 'utf8'));
+        expect(meta.capture_id).not.toBe(captureId);
+      } catch {
+        // no metadata yet — folder should not exist for canceled capture
+      }
+    }
+
+    const videoBuffer = await readFile(testVideoPath);
+    const formData = new FormData();
+    formData.append('captureId', captureId);
+    formData.append('heightInches', '75');
+    formData.append('widthInches', '40');
+    formData.append('lengthInches', '48');
+    formData.append('capturedAt', new Date().toISOString());
+    formData.append('video', new Blob([videoBuffer], { type: 'video/webm' }), 'test.webm');
+
+    const uploadResp = await fetch(`${baseUrl}/api/pallets/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${deviceToken}` },
+      body: formData,
+    });
+    expect(uploadResp.ok).toBe(true);
+    const uploadData = await uploadResp.json();
+    expect(uploadData.status).toBe('uploaded');
+    expect(uploadData.palletId).toMatch(/pallet_\d{4}/);
+
+    const statusAfter = await server.status();
+    expect(statusAfter.pallets.some(p => p.captureId === captureId)).toBe(true);
+    await access(path.join(testRoot, uploadData.palletId, 'metadata.json'));
   });
 
   test('rejects upload without device token', async () => {

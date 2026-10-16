@@ -3,6 +3,8 @@ let db;
 let deviceToken;
 let currentCapture = null;
 let uploadQueue = [];
+let activeUploadXhr = null;
+let uploadProgressPct = 0;
 let stream = null;
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -54,6 +56,20 @@ async function loadQueue() {
   };
 }
 
+function setUploadProgress(pct) {
+  uploadProgressPct = pct;
+  el('upload-progress-fill').style.width = pct + '%';
+  el('upload-progress-label').textContent = pct > 0 ? 'Uploading… ' + pct + '%' : 'Uploading…';
+}
+
+function showUploadActive(show) {
+  el('upload-active').hidden = !show;
+  if (!show) {
+    setUploadProgress(0);
+    activeUploadXhr = null;
+  }
+}
+
 function renderQueue() {
   const q = el('queue');
   q.innerHTML = '';
@@ -65,12 +81,17 @@ function renderQueue() {
     const div = document.createElement('div');
     div.className = 'item';
     const status = item.status || 'pending';
-    div.innerHTML = '<div class="status status-' + status + '">' + status.toUpperCase() + '</div>' +
+    const progress = status === 'uploading' && uploadProgressPct > 0 ? ' · ' + uploadProgressPct + '%' : '';
+    div.innerHTML = '<div class="status status-' + status + '">' + status.toUpperCase() + progress + '</div>' +
       '<div>Capture ' + item.captureId + ' · ' + item.heightInches + '"H × ' + item.widthInches + '"W × ' + item.lengthInches + '"L</div>' +
-      (status === 'failed' ? '<button onclick="window.retryUpload(\'' + item.captureId + '\')">Retry</button>' : '');
+      ((status === 'failed' || status === 'pending') ? '<button onclick="window.retryUpload(\'' + item.captureId + '\')">' + (status === 'failed' ? 'Retry' : 'Upload now') + '</button>' : '');
     q.appendChild(div);
   });
 }
+
+el('cancel-upload').onclick = () => {
+  if (activeUploadXhr) activeUploadXhr.abort();
+};
 
 async function loadPallets() {
   try {
@@ -230,40 +251,79 @@ el('save').onclick = async () => {
   };
 };
 
+function uploadCapture(item) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('captureId', item.captureId);
+    formData.append('heightInches', item.heightInches);
+    formData.append('widthInches', item.widthInches);
+    formData.append('lengthInches', item.lengthInches);
+    if (item.notes) formData.append('notes', item.notes);
+    if (item.referenceId) formData.append('referenceId', item.referenceId);
+    formData.append('capturedAt', item.capturedAt);
+
+    const videoExt = item.videoBlob.type === 'video/mp4' ? 'mp4' : 'webm';
+    formData.append('video', item.videoBlob, 'video.' + videoExt);
+
+    const xhr = new XMLHttpRequest();
+    activeUploadXhr = xhr;
+    xhr.open('POST', '/api/pallets/upload');
+    xhr.setRequestHeader('Authorization', 'Bearer ' + deviceToken);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.min(100, Math.round((e.loaded / e.total) * 100));
+        setUploadProgress(pct);
+        renderQueue();
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (err) {
+          reject(err);
+        }
+      } else {
+        let detail = xhr.statusText;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body.error) detail = body.error;
+        } catch { /* ignore */ }
+        reject(new Error('Upload failed: ' + detail));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload failed: network error'));
+    xhr.onabort = () => reject(new DOMException('Upload canceled', 'AbortError'));
+    xhr.send(formData);
+  });
+}
+
 async function processQueue() {
   for (const item of uploadQueue) {
     if (item.status === 'uploaded' || item.status === 'uploading') continue;
     item.status = 'uploading';
+    showUploadActive(true);
     renderQueue();
-    
+
     try {
-      const formData = new FormData();
-      formData.append('captureId', item.captureId);
-      formData.append('heightInches', item.heightInches);
-      formData.append('widthInches', item.widthInches);
-      formData.append('lengthInches', item.lengthInches);
-      if (item.notes) formData.append('notes', item.notes);
-      if (item.referenceId) formData.append('referenceId', item.referenceId);
-      formData.append('capturedAt', item.capturedAt);
-      
-      const videoExt = item.videoBlob.type === 'video/mp4' ? 'mp4' : 'webm';
-      formData.append('video', item.videoBlob, `video.${videoExt}`);
-      
-      const r = await fetch('/api/pallets/upload', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + deviceToken },
-        body: formData
-      });
-      
-      if (!r.ok) throw new Error('Upload failed: ' + r.statusText);
-      const d = await r.json();
+      const d = await uploadCapture(item);
       item.status = 'uploaded';
       item.palletId = d.palletId;
       const tx = db.transaction('queue', 'readwrite');
       tx.objectStore('queue').put(item);
+      showUploadActive(false);
       renderQueue();
       message('Pallet uploaded successfully!');
     } catch (e) {
+      showUploadActive(false);
+      if (e.name === 'AbortError') {
+        item.status = 'pending';
+        const tx = db.transaction('queue', 'readwrite');
+        tx.objectStore('queue').put(item);
+        renderQueue();
+        message('Upload canceled.');
+        break;
+      }
       item.status = 'failed';
       const tx = db.transaction('queue', 'readwrite');
       tx.objectStore('queue').put(item);
