@@ -22,6 +22,30 @@ function message(text, error = false) {
   el('message').className = error ? 'error' : '';
 }
 
+function isServerBusyMessage(text) {
+  return /being processed|wait for active upload/i.test(text || '');
+}
+
+async function fetchUploadIdle() {
+  const r = await fetch('/api/health', {
+    headers: deviceToken ? { Authorization: 'Bearer ' + deviceToken } : {}
+  });
+  if (!r.ok) return false;
+  const d = await r.json();
+  return d.uploadBusy === false;
+}
+
+async function waitForServerUploadIdle(maxMs = 65000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      if (await fetchUploadIdle()) return true;
+    } catch { /* retry */ }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return false;
+}
+
 function dbPromise(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -487,6 +511,19 @@ async function processQueue() {
         }
         const current = uploadQueue.find((q) => q.captureId === captureId);
         if (current) {
+          if (isServerBusyMessage(e.message)) {
+            current.status = 'queued';
+            await persistQueueItem(current);
+            renderQueue();
+            message('Desktop was busy. Waiting to retry upload…');
+            if (await waitForServerUploadIdle()) {
+              scheduleProcessQueue();
+            } else {
+              message('Desktop is still busy. Will retry automatically.', true);
+              scheduleProcessQueue();
+            }
+            continue;
+          }
           current.status = 'failed';
           await persistQueueItem(current);
           renderQueue();
