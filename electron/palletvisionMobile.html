@@ -32,8 +32,14 @@ video { width: 100%; max-height: 400px; background: #000; border-radius: 8px; ma
 .error { background: #fef3f3; color: #8b2020; border: 1px solid #fcc; }
 #queue { margin-top: 12px; }
 #queue .item { background: #f5f8fa; border: 1px solid #e7eaf0; border-radius: 8px; padding: 12px; margin-bottom: 8px; font-size: 11px; }
+#queue .item-actions { display: flex; gap: 8px; margin-top: 10px; }
+#queue .item-actions .queue-action { width: auto; flex: 1; margin-top: 0; min-height: 36px; padding: 8px 10px; }
+#queue .item-actions .danger { background: #fef3f3; color: #8b2020; }
+#queue .item-actions .danger:hover { background: #fde0e0; }
 #queue .item .status { font-weight: 600; color: #425762; }
 .status-pending { color: #8892a0; }
+.status-queued { color: #6b7a8c; }
+.status-pending-active { color: #0d7aa3; }
 .status-uploading { color: #0d7aa3; }
 .status-uploaded { color: #2d7a3f; }
 .status-failed { color: #8b2020; }
