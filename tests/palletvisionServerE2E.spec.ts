@@ -259,6 +259,79 @@ test.describe('PalletVision Server E2E', () => {
     await new Promise(resolve => setTimeout(resolve, 1200));
   }
 
+  test('health reports upload idle immediately after abort and follow-up upload succeeds', async () => {
+    const captureId = `cap_abort_immediate_${randomUUID()}`;
+    await abortUploadMidStream(captureId);
+
+    const healthResp = await fetch(`${baseUrl}/api/health`, {
+      headers: { Authorization: `Bearer ${deviceToken}` }
+    });
+    expect(healthResp.ok).toBe(true);
+    const health = await healthResp.json();
+    expect(health.uploadBusy).toBe(false);
+
+    const videoBuffer = await readFile(testVideoPath);
+    const formData = new FormData();
+    formData.append('captureId', captureId);
+    formData.append('heightInches', '75');
+    formData.append('widthInches', '40');
+    formData.append('lengthInches', '48');
+    formData.append('capturedAt', new Date().toISOString());
+    formData.append('video', new Blob([videoBuffer], { type: 'video/webm' }), 'test.webm');
+
+    const uploadResp = await fetch(`${baseUrl}/api/pallets/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${deviceToken}` },
+      body: formData
+    });
+    expect(uploadResp.ok).toBe(true);
+    const uploadData = await uploadResp.json();
+    expect(uploadData.status).toBe('uploaded');
+  });
+
+  test('ffmpeg extraction failure does not block a subsequent upload', async () => {
+    const originalExtract = (server as unknown as { extractFrames: (p: unknown) => Promise<void> }).extractFrames.bind(server);
+    (server as unknown as { extractFrames: (p: unknown) => Promise<void> }).extractFrames = async (pallet: any) => {
+      pallet.processingStatus = 'failed';
+      pallet.framesExtracted = 0;
+    };
+
+    const videoBuffer = await readFile(testVideoPath);
+    const firstId = `cap_ff_fail_${randomUUID()}`;
+    const firstForm = new FormData();
+    firstForm.append('captureId', firstId);
+    firstForm.append('heightInches', '72');
+    firstForm.append('widthInches', '40');
+    firstForm.append('lengthInches', '48');
+    firstForm.append('capturedAt', new Date().toISOString());
+    firstForm.append('video', new Blob([videoBuffer], { type: 'video/webm' }), 'test.webm');
+    const firstResp = await fetch(`${baseUrl}/api/pallets/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${deviceToken}` },
+      body: firstForm
+    });
+    expect(firstResp.ok).toBe(true);
+
+    const secondId = `cap_ff_fail_${randomUUID()}`;
+    const secondForm = new FormData();
+    secondForm.append('captureId', secondId);
+    secondForm.append('heightInches', '73');
+    secondForm.append('widthInches', '40');
+    secondForm.append('lengthInches', '48');
+    secondForm.append('capturedAt', new Date().toISOString());
+    secondForm.append('video', new Blob([videoBuffer], { type: 'video/webm' }), 'test.webm');
+    const secondResp = await fetch(`${baseUrl}/api/pallets/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${deviceToken}` },
+      body: secondForm
+    });
+    expect(secondResp.ok).toBe(true);
+    const secondData = await secondResp.json();
+    expect(secondData.status).toBe('uploaded');
+
+    (server as unknown as { extractFrames: (p: unknown) => Promise<void> }).extractFrames = originalExtract;
+  });
+
   test('aborted mid-upload cleans up staging and allows a follow-up upload', async () => {
     const captureId = `cap_abort_${randomUUID()}`;
     const palletsBefore = (await server.status()).pallets.length;

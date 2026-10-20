@@ -164,6 +164,17 @@ test('palletvision mobile delete removes queued and uploading captures', async (
   await uploadingRow.getByRole('button', { name: 'Delete' }).click();
   await expect.poll(() => queueCount(mobile), { timeout: 15000 }).toBe(countBeforeUploadingDelete - 1);
 
+  await expect.poll(async () => {
+    const health = await mobile.evaluate(async () => {
+      const token = localStorage.getItem('palletvision-device-token');
+      const r = await fetch('/api/health', { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+      return r.json();
+    });
+    return health.uploadBusy === false;
+  }, { timeout: 20000 }).toBe(true);
+
+  await expect.poll(() => queueCount(mobile), { timeout: 60000 }).toBe(0);
+
   await mobile.close();
   await app.close();
 });

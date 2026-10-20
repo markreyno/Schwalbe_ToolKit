@@ -135,7 +135,9 @@ export function PalletVisionCollectorPage() {
             <p style={{ fontWeight: 600, marginBottom: '6px' }}>Activity log</p>
             <ul style={{ margin: 0, paddingLeft: '18px' }}>
               {state.events.slice(0, 5).map((evt, i) => <li key={evt.at + String(i)}>
-                {evt.type === 'upload_canceled' ? `Upload canceled${evt.captureId ? ` (${evt.captureId})` : ''}` : evt.type}
+                {evt.type === 'upload_canceled'
+                  ? `Upload canceled${evt.captureId ? ` (${evt.captureId})` : ''}`
+                  : `Upload lock released (${evt.reason})${evt.detail ? `: ${evt.detail}` : ''}`}
                 {' · '}{new Date(evt.at).toLocaleTimeString()}
               </li>)}
             </ul>

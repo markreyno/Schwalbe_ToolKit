@@ -95,9 +95,11 @@ export class PalletVisionServer {
   private preferredAddress = '';
   private useTailscale = false;
   private error = '';
-  private writing = false;
+  private uploadLock: { reason: 'mobile_upload' | 'desktop_import'; startedAt: number; lastActivityAt: number; captureId?: string } | null = null;
+  private uploadLockTimer: NodeJS.Timeout | null = null;
+  private static readonly UPLOAD_LOCK_STALE_MS = 60_000;
   private persistence: Promise<void> = Promise.resolve();
-  private events: { type: 'upload_canceled'; captureId?: string; at: string }[] = [];
+  private events: ({ type: 'upload_canceled'; captureId?: string; at: string } | { type: 'upload_lock_released'; reason: 'stale_timeout' | 'stale_no_progress' | 'forced'; at: string; detail?: string })[] = [];
 
   constructor(private settings: string) {}
 
@@ -124,7 +126,105 @@ export class PalletVisionServer {
     return next;
   }
 
-  async setRoot(root: string) { if (this.writing) throw new Error('Wait for active upload to complete.'); await fs.access(root); this.root = root; await this.persist(); }
+  private get writing() {
+    return this.uploadLock !== null;
+  }
+
+  private pushEvent(event: (typeof this.events)[number]) {
+    this.events.unshift(event);
+    if (this.events.length > 20) this.events.length = 20;
+  }
+
+  private touchUploadLock() {
+    if (!this.uploadLock) return;
+    this.uploadLock.lastActivityAt = Date.now();
+    this.scheduleUploadLockWatchdog();
+  }
+
+  private scheduleUploadLockWatchdog() {
+    if (this.uploadLockTimer) clearTimeout(this.uploadLockTimer);
+    this.uploadLockTimer = setTimeout(() => {
+      void this.expireStaleUploadLock('stale_timeout');
+    }, PalletVisionServer.UPLOAD_LOCK_STALE_MS);
+  }
+
+  private async cleanupStagingUploads() {
+    try {
+      const dir = this.stagingDir();
+      const entries = await fs.readdir(dir);
+      for (const name of entries) {
+        if (name.startsWith('upload-')) await fs.unlink(path.join(dir, name)).catch(() => {});
+      }
+    } catch { /* staging may not exist */ }
+  }
+
+  private releaseUploadLock(detail?: string) {
+    if (this.uploadLockTimer) {
+      clearTimeout(this.uploadLockTimer);
+      this.uploadLockTimer = null;
+    }
+    if (this.uploadLock) {
+      this.uploadLock = null;
+      if (detail) {
+        this.pushEvent({ type: 'upload_lock_released', reason: 'forced', at: new Date().toISOString(), detail });
+      }
+    }
+  }
+
+  private async expireStaleUploadLock(cause: 'stale_timeout' | 'stale_no_progress' = 'stale_no_progress') {
+    if (!this.uploadLock) return false;
+    const idleMs = Date.now() - this.uploadLock.lastActivityAt;
+    if (idleMs < PalletVisionServer.UPLOAD_LOCK_STALE_MS) return false;
+    const reason = cause === 'stale_timeout' ? 'stale_timeout' : 'stale_no_progress';
+    this.pushEvent({
+      type: 'upload_lock_released',
+      reason,
+      at: new Date().toISOString(),
+      detail: `Released idle upload lock after ${Math.round(idleMs / 1000)}s (${this.uploadLock.reason})`
+    });
+    this.releaseUploadLock();
+    await this.cleanupStagingUploads();
+    return true;
+  }
+
+  private assertUploadIdle() {
+    void this.expireStaleUploadLock();
+    if (this.uploadLock) {
+      throw new Error('Another pallet is being processed. Retry.');
+    }
+  }
+
+  private beginUploadLock(reason: 'mobile_upload' | 'desktop_import', captureId?: string) {
+    void this.expireStaleUploadLock();
+    if (this.uploadLock) throw new Error('Another pallet is being processed. Retry.');
+    const now = Date.now();
+    this.uploadLock = { reason, startedAt: now, lastActivityAt: now, captureId };
+    this.scheduleUploadLockWatchdog();
+  }
+
+  private uploadLockStatus() {
+    if (!this.uploadLock) return { uploadBusy: false, uploadLock: null as null };
+    return {
+      uploadBusy: true,
+      uploadLock: {
+        reason: this.uploadLock.reason,
+        startedAt: new Date(this.uploadLock.startedAt).toISOString(),
+        lastActivityAt: new Date(this.uploadLock.lastActivityAt).toISOString(),
+        captureId: this.uploadLock.captureId
+      }
+    };
+  }
+
+  private async withUploadLock<T>(reason: 'mobile_upload' | 'desktop_import', fn: () => Promise<T>): Promise<T> {
+    this.beginUploadLock(reason);
+    try {
+      return await fn();
+    } finally {
+      this.releaseUploadLock();
+    }
+  }
+
+  async setRoot(root: string) { if (this.uploadLock) throw new Error('Wait for active upload to complete.'); await fs.access(root); this.root = root; await this.persist(); }
   
   async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); }
 
@@ -175,7 +275,6 @@ export class PalletVisionServer {
   }
 
   async importVideo(videoPath: string, data: { heightInches: number; widthInches: number; lengthInches: number; notes?: string; referenceId?: string }) {
-    if (this.writing) throw new Error('Another pallet is being processed. Wait and retry.');
     if (!this.root) throw new Error('Choose a storage folder first.');
     
     await fs.access(videoPath);
@@ -199,7 +298,7 @@ export class PalletVisionServer {
     if (!widthInches || widthInches <= 0) throw new Error('Invalid width.');
     if (!lengthInches || lengthInches <= 0) throw new Error('Invalid length.');
     
-    this.writing = true;
+    return this.withUploadLock('desktop_import', async () => {
     let stagedPath: string | null = null;
     try {
       const captureId = `cap_desktop_${Date.now()}_${randomBytes(3).toString('hex')}`;
@@ -260,8 +359,8 @@ export class PalletVisionServer {
       void this.extractFrames(pallet);
     } finally {
       if (stagedPath) await fs.unlink(stagedPath).catch(() => {});
-      this.writing = false;
     }
+    });
   }
 
   async status() {
@@ -277,7 +376,8 @@ export class PalletVisionServer {
       urls = addresses.map(a => `http://${a}:${this.port}`);
     }
     const base = urls[0] || `http://127.0.0.1:${this.port}`;
-    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), events: this.events.map(e => ({ ...e })), pallets: this.pallets.map(p => ({ ...p })) };
+    const lock = this.uploadLockStatus();
+    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), uploadBusy: lock.uploadBusy, uploadLock: lock.uploadLock, events: this.events.map(e => ({ ...e })), pallets: this.pallets.map(p => ({ ...p })) };
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -326,26 +426,29 @@ export class PalletVisionServer {
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/health') { json({ status: 'ok', palletCount: this.pallets.length }); return; }
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      const lock = this.uploadLockStatus();
+      json({ status: 'ok', palletCount: this.pallets.length, uploadBusy: lock.uploadBusy, uploadLock: lock.uploadLock });
+      return;
+    }
 
     if (req.method === 'POST' && url.pathname === '/api/pallets/upload') {
-      if (this.writing) throw new Error('Another pallet is being processed. Retry.');
-      
-      this.writing = true;
+      this.assertUploadIdle();
+      this.beginUploadLock('mobile_upload');
       let videoPath: string | null = null;
       let clientAborted = false;
       let cancellationLogged = false;
       let uploadResponded = false;
       let videoWriteStream: WriteStream | null = null;
       let busboyParser: ReturnType<typeof busboy> | null = null;
+      let resolveBusboyWait: (() => void) | null = null;
+      let rejectVideoWrite: ((err: Error) => void) | null = null;
       const fields: Record<string, string> = {};
 
       const recordCancellation = () => {
         if (cancellationLogged) return;
         cancellationLogged = true;
-        const event = { type: 'upload_canceled' as const, captureId: fields.captureId, at: new Date().toISOString() };
-        this.events.unshift(event);
-        if (this.events.length > 20) this.events.length = 20;
+        this.pushEvent({ type: 'upload_canceled', captureId: fields.captureId, at: new Date().toISOString() });
         console.log('[PalletVision] Upload canceled by client', fields.captureId ? `(captureId=${fields.captureId})` : '');
       };
 
@@ -374,10 +477,14 @@ export class PalletVisionServer {
       const onClientAbort = () => {
         if (clientAborted) return;
         clientAborted = true;
+        if (this.uploadLock) this.uploadLock.captureId = fields.captureId;
         if (busboyParser) req.unpipe(busboyParser);
         busboyParser?.removeAllListeners();
         busboyParser?.destroy();
         videoWriteStream?.destroy();
+        rejectVideoWrite?.(new Error('client aborted'));
+        resolveBusboyWait?.();
+        req.destroy();
         void cleanupStaging();
         respondCanceled();
       };
@@ -394,6 +501,10 @@ export class PalletVisionServer {
 
         bb.on('field', (name, value) => {
           fields[name] = value;
+          if (name === 'captureId') {
+            if (this.uploadLock) this.uploadLock.captureId = value;
+          }
+          this.touchUploadLock();
         });
 
         bb.on('file', (name, file, info) => {
@@ -408,7 +519,10 @@ export class PalletVisionServer {
           videoWriteStream = createWriteStream(tempPath);
           
           file.on('data', (chunk) => {
-            if (!clientAborted) videoSize += chunk.length;
+            if (!clientAborted) {
+              videoSize += chunk.length;
+              this.touchUploadLock();
+            }
           });
 
           file.on('limit', () => {
@@ -416,6 +530,7 @@ export class PalletVisionServer {
           });
           
           videoWriteDone = new Promise<void>((resolve, reject) => {
+            rejectVideoWrite = reject;
             videoWriteStream!.on('finish', () => resolve());
             videoWriteStream!.on('error', (err) => {
               if (clientAborted) resolve();
@@ -431,6 +546,7 @@ export class PalletVisionServer {
         });
 
         await new Promise<void>((resolve, reject) => {
+          resolveBusboyWait = resolve;
           bb.on('finish', () => resolve());
           bb.on('error', (err) => {
             if (clientAborted || isConnectionAbortError(err)) {
@@ -539,7 +655,7 @@ export class PalletVisionServer {
         throw e;
       } finally {
         if (!clientAborted && videoPath) await fs.unlink(videoPath).catch(() => {});
-        this.writing = false;
+        this.releaseUploadLock();
       }
       return;
     }
