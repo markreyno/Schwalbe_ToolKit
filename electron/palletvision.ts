@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { PalletVisionServer } from './palletvisionServer';
+import { registerMainProcessErrorHandlers } from './mainProcessLog';
 
 export async function registerPalletVision(window: () => BrowserWindow | null) {
   const service = new PalletVisionServer(path.join(app.getPath('userData'), 'palletvision.json'));
+  registerMainProcessErrorHandlers((summary) => service.noteProcessError(summary));
   await service.start();
 
   ipcMain.handle('toolkit:palletvision', async (event, action: string, data: any) => {

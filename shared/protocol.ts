@@ -31,6 +31,7 @@ export type FreightState = { root: string; running: boolean; error: string; addr
 
 export type PalletVisionEvent =
   | { type: 'upload_canceled'; captureId?: string; at: string }
-  | { type: 'upload_lock_released'; reason: 'stale_timeout' | 'stale_no_progress' | 'forced'; at: string; detail?: string };
+  | { type: 'upload_lock_released'; reason: 'stale_timeout' | 'stale_no_progress' | 'forced'; at: string; detail?: string }
+  | { type: 'process_error'; message: string; at: string };
 export type PalletVisionUploadLock = { reason: 'mobile_upload' | 'desktop_import'; startedAt: string; lastActivityAt: string; captureId?: string };
 export type PalletVisionState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; qrUrl: string; qr: string; uploadBusy: boolean; uploadLock: PalletVisionUploadLock | null; events: PalletVisionEvent[]; pallets: { id: string; captureId: string; heightInches: number; widthInches: number; lengthInches: number; notes?: string; referenceId?: string; capturedAt: string; deviceToken: string; folder: string; processingStatus: string; framesExtracted: number }[] };

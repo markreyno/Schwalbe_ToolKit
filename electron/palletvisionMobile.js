@@ -17,6 +17,15 @@ const ACTIVE_STATUSES = new Set(['uploading', 'pending-active']);
 
 const el = (id) => document.getElementById(id);
 
+window.addEventListener('error', (event) => {
+  message('Something went wrong on this page. Try again or reload.', true);
+  console.error(event.error || event.message);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  message('Upload interrupted. Check your connection and try again.', true);
+  console.error(event.reason);
+});
+
 function message(text, error = false) {
   el('message').textContent = text;
   el('message').className = error ? 'error' : '';
@@ -437,7 +446,7 @@ function uploadCapture(item) {
     };
     xhr.onerror = () => {
       clearActiveXhr();
-      reject(new Error('Upload failed: network error'));
+      reject(new Error('Upload failed: connection lost. Keep the toolkit open and try again.'));
     };
     xhr.onabort = () => {
       clearActiveXhr();

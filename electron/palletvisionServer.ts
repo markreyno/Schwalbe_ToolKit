@@ -99,7 +99,7 @@ export class PalletVisionServer {
   private uploadLockTimer: NodeJS.Timeout | null = null;
   private static readonly UPLOAD_LOCK_STALE_MS = 60_000;
   private persistence: Promise<void> = Promise.resolve();
-  private events: ({ type: 'upload_canceled'; captureId?: string; at: string } | { type: 'upload_lock_released'; reason: 'stale_timeout' | 'stale_no_progress' | 'forced'; at: string; detail?: string })[] = [];
+  private events: ({ type: 'upload_canceled'; captureId?: string; at: string } | { type: 'upload_lock_released'; reason: 'stale_timeout' | 'stale_no_progress' | 'forced'; at: string; detail?: string } | { type: 'process_error'; message: string; at: string })[] = [];
 
   constructor(private settings: string) {}
 
@@ -113,7 +113,18 @@ export class PalletVisionServer {
     }
     try { const data = JSON.parse(await fs.readFile(this.settings, 'utf8')); this.root = data.root || ''; this.deviceTokens = new Map(data.deviceTokens || []); this.pallets = data.pallets || []; this.useTailscale = data.useTailscale || false; } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read PalletVision settings.'; }
     if (!this.root) this.root = path.join(os.homedir(), 'PalletVision', 'data');
-    this.server = http.createServer((req, res) => { void this.handle(req, res).catch(e => { if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); } else res.end(); }); });
+    this.server = http.createServer((req, res) => {
+      req.on('error', (err) => this.logProcessError('request error', err));
+      res.on('error', (err) => this.logProcessError('response error', err));
+      req.socket?.on('error', (err) => this.logProcessError('socket error', err));
+      void this.handle(req, res).catch((e) => {
+        this.logProcessError('upload handler', e);
+        if (!res.headersSent && !res.writableEnded) {
+          res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      });
+    });
     await new Promise<void>(resolve => { this.server!.once('error', e => { this.error = e.message; resolve(); }); this.server!.listen(48732, '0.0.0.0', () => { this.port = 48732; resolve(); }); });
   }
 
@@ -135,6 +146,25 @@ export class PalletVisionServer {
     if (this.events.length > 20) this.events.length = 20;
   }
 
+  noteProcessError(message: string) {
+    this.pushEvent({ type: 'process_error', message, at: new Date().toISOString() });
+  }
+
+  private isConnectionAbortError(err: unknown) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    return code === 'ECONNRESET' || code === 'EPIPE' || code === 'ERR_STREAM_PREMATURE_CLOSE'
+      || /aborted|client aborted|unexpected end|truncated|premature close|unexpected end of form/i.test(message);
+  }
+
+  private logProcessError(context: string, err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (this.isConnectionAbortError(err)) return;
+    const summary = `${context}: ${message}`;
+    console.error('[PalletVision]', summary, err);
+    this.noteProcessError(summary);
+  }
+
   private touchUploadLock() {
     if (!this.uploadLock) return;
     this.uploadLock.lastActivityAt = Date.now();
@@ -144,7 +174,7 @@ export class PalletVisionServer {
   private scheduleUploadLockWatchdog() {
     if (this.uploadLockTimer) clearTimeout(this.uploadLockTimer);
     this.uploadLockTimer = setTimeout(() => {
-      void this.expireStaleUploadLock('stale_timeout');
+      void this.expireStaleUploadLock('stale_timeout').catch((err) => this.logProcessError('stale upload lock watchdog', err));
     }, PalletVisionServer.UPLOAD_LOCK_STALE_MS);
   }
 
@@ -442,8 +472,19 @@ export class PalletVisionServer {
       let videoWriteStream: WriteStream | null = null;
       let busboyParser: ReturnType<typeof busboy> | null = null;
       let resolveBusboyWait: (() => void) | null = null;
-      let rejectVideoWrite: ((err: Error) => void) | null = null;
+      let resolveVideoWrite: (() => void) | null = null;
+      let videoWriteDone: Promise<void> | null = null;
       const fields: Record<string, string> = {};
+
+      const finishVideoWrite = () => {
+        resolveVideoWrite?.();
+        resolveVideoWrite = null;
+      };
+
+      const drainVideoWrite = async () => {
+        if (!videoWriteDone) return;
+        await videoWriteDone.catch(() => {});
+      };
 
       const recordCancellation = () => {
         if (cancellationLogged) return;
@@ -457,13 +498,6 @@ export class PalletVisionServer {
           await fs.unlink(videoPath).catch(() => {});
           videoPath = null;
         }
-      };
-
-      const isConnectionAbortError = (err: unknown) => {
-        const code = (err as NodeJS.ErrnoException)?.code;
-        const message = err instanceof Error ? err.message : String(err);
-        return code === 'ECONNRESET' || code === 'EPIPE' || code === 'ERR_STREAM_PREMATURE_CLOSE'
-          || /aborted|unexpected end|truncated|premature close|unexpected end of form/i.test(message);
       };
 
       const respondCanceled = () => {
@@ -482,22 +516,30 @@ export class PalletVisionServer {
         busboyParser?.removeAllListeners();
         busboyParser?.destroy();
         videoWriteStream?.destroy();
-        rejectVideoWrite?.(new Error('client aborted'));
+        finishVideoWrite();
         resolveBusboyWait?.();
         req.destroy();
         void cleanupStaging();
         respondCanceled();
       };
 
+      const onConnectionFault = (err: unknown) => {
+        if (this.isConnectionAbortError(err)) onClientAbort();
+        else this.logProcessError('upload stream', err);
+      };
+
       try {
         await this.ensureStagingDir();
         let videoSize = 0;
-        let videoWriteDone: Promise<void> | null = null;
 
         busboyParser = busboy({ headers: req.headers, limits: { fileSize: 500 * 1024 * 1024 } });
         const bb = busboyParser;
 
         req.on('aborted', onClientAbort);
+        req.on('close', () => {
+          if (!uploadResponded && req.aborted) onClientAbort();
+        });
+        req.on('error', onConnectionFault);
 
         bb.on('field', (name, value) => {
           fields[name] = value;
@@ -506,6 +548,8 @@ export class PalletVisionServer {
           }
           this.touchUploadLock();
         });
+
+        bb.on('error', onConnectionFault);
 
         bb.on('file', (name, file, info) => {
           if (name !== 'video') {
@@ -517,6 +561,7 @@ export class PalletVisionServer {
           const tempPath = this.newStagingPath(ext, 'upload');
           videoPath = tempPath;
           videoWriteStream = createWriteStream(tempPath);
+          videoWriteStream.on('error', onConnectionFault);
           
           file.on('data', (chunk) => {
             if (!clientAborted) {
@@ -528,19 +573,13 @@ export class PalletVisionServer {
           file.on('limit', () => {
             file.resume();
           });
+          file.on('error', onConnectionFault);
           
-          videoWriteDone = new Promise<void>((resolve, reject) => {
-            rejectVideoWrite = reject;
+          videoWriteDone = new Promise<void>((resolve) => {
+            resolveVideoWrite = resolve;
             videoWriteStream!.on('finish', () => resolve());
-            videoWriteStream!.on('error', (err) => {
-              if (clientAborted) resolve();
-              else reject(err);
-            });
-            file.on('error', (err) => {
-              if (clientAborted) resolve();
-              else reject(err);
-            });
           });
+          void videoWriteDone.catch(() => {});
           
           file.pipe(videoWriteStream);
         });
@@ -549,7 +588,7 @@ export class PalletVisionServer {
           resolveBusboyWait = resolve;
           bb.on('finish', () => resolve());
           bb.on('error', (err) => {
-            if (clientAborted || isConnectionAbortError(err)) {
+            if (clientAborted || this.isConnectionAbortError(err)) {
               onClientAbort();
               resolve();
             } else reject(err);
@@ -557,10 +596,11 @@ export class PalletVisionServer {
           req.pipe(bb);
         });
         if (clientAborted) {
+          await drainVideoWrite();
           await cleanupStaging();
           return;
         }
-        if (videoWriteDone) await videoWriteDone;
+        await drainVideoWrite();
         if (clientAborted) {
           await cleanupStaging();
           return;
@@ -647,12 +687,19 @@ export class PalletVisionServer {
         uploadResponded = true;
         json({ palletId, status: 'uploaded', processingStatus: 'pending' });
       } catch (e) {
-        if (clientAborted || isConnectionAbortError(e)) {
-          onClientAbort();
+        if (clientAborted || this.isConnectionAbortError(e)) {
+          if (!clientAborted) onClientAbort();
+          await drainVideoWrite();
           await cleanupStaging();
           return;
         }
-        throw e;
+        this.logProcessError('upload', e);
+        if (!uploadResponded && !res.headersSent) {
+          res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+          uploadResponded = true;
+          return;
+        }
       } finally {
         if (!clientAborted && videoPath) await fs.unlink(videoPath).catch(() => {});
         this.releaseUploadLock();
@@ -700,6 +747,7 @@ export class PalletVisionServer {
     } catch (e: any) {
       pallet.processingStatus = 'failed';
       pallet.framesExtracted = 0;
+      this.logProcessError('ffmpeg frame extraction', e);
       await this.persist();
     }
   }
