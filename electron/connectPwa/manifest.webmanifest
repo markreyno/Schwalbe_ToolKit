@@ -1,11 +1,17 @@
 {
+  "id": "/",
   "name": "Schwalbe ToolKit",
   "short_name": "ToolKit",
   "description": "Phone hub for Schwalbe ToolKit warehouse tools",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#f5f8fa",
   "theme_color": "#f5f8fa",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "handle_links": "preferred",
   "icons": [
     {
       "src": "/icon-192.png",

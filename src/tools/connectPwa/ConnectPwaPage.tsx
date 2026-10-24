@@ -107,7 +107,7 @@ export function ConnectPwaPage() {
         </>}
         <input aria-label="Phone hub link" readOnly value={url}/>
         <button disabled={!url} onClick={() => { void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(e => setError(String(e))); }}>{copied ? 'Link copied' : 'Copy link'}</button>
-        <p className="freight-muted">Hub links use HTTPS on port {state?.port}. On local Wi‑Fi, trust the desktop CA once (see Phone hub server). The phone hub does not show install steps in the app; workers can add it to the home screen from the browser menu if they want a shortcut.</p>
+        <p className="freight-muted">Hub links use HTTPS on port {state?.port}. On local Wi‑Fi, trust the desktop CA once (see Phone hub server). The QR code opens the <strong>install</strong> page (<code>/install</code>); the warehouse hub itself stays free of install prompts.</p>
       </section>
     </div>
   </>;
