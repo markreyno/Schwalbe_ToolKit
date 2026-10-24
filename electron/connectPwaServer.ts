@@ -10,6 +10,7 @@ import { isAllowedHubHost, normalizeHubHost } from './toolPhoneUrls';
 import type { PhoneTlsManager } from './tls/phoneTlsManager';
 import { startPhoneToolServer, type PhoneServerHandle } from './tls/phoneServer';
 import { buildPhoneAddressList, listPhoneUrlHosts } from './tls/phoneUrls';
+import { PWA_CACHE_VERSION_PLACEHOLDER } from './connectPwa/pwaCache';
 
 export const CONNECT_PWA_PORT = 48734;
 const FREIGHT_PORT = 48731;
@@ -26,6 +27,8 @@ export class ConnectPwaServer {
   private useTailscale = false;
   private devices = new Map<string, DeviceRecord>();
   private assetDir = path.join(__dirname, 'connectPwa');
+  private appRoot = path.join(__dirname, '..');
+  private appVersion?: string;
 
   constructor(
     private settingsPath: string,
@@ -173,6 +176,20 @@ export class ConnectPwaServer {
     return fs.readFile(path.join(this.assetDir, name));
   }
 
+  private async getAppVersion() {
+    if (!this.appVersion) {
+      const pkg = JSON.parse(await fs.readFile(path.join(this.appRoot, 'package.json'), 'utf8'));
+      this.appVersion = String(pkg.version || '0.0.0');
+    }
+    return this.appVersion;
+  }
+
+  private async readServiceWorker() {
+    const template = await fs.readFile(path.join(this.assetDir, 'sw.js'), 'utf8');
+    const version = await this.getAppVersion();
+    return Buffer.from(template.replaceAll(PWA_CACHE_VERSION_PLACEHOLDER, version), 'utf8');
+  }
+
   private contentType(name: string) {
     if (name.endsWith('.html')) return 'text/html; charset=utf-8';
     if (name.endsWith('.js')) return 'application/javascript; charset=utf-8';
@@ -219,6 +236,7 @@ export class ConnectPwaServer {
       '/': 'connectPwaMobile.html',
       '/hub.css': 'hub.css',
       '/connectPwaMobile.js': 'connectPwaMobile.js',
+      '/pwaInstallUi.js': 'pwaInstallUi.js',
       '/manifest.webmanifest': 'manifest.webmanifest',
       '/sw.js': 'sw.js',
       '/brand-logo.png': 'brand-logo.png',
@@ -228,8 +246,11 @@ export class ConnectPwaServer {
     };
     const file = staticMap[url.pathname];
     if (req.method === 'GET' && file) {
-      const body = await this.readAsset(file);
-      const cache = file === 'connectPwaMobile.html' ? 'no-store' : 'public, max-age=3600';
+      const body = file === 'sw.js' ? await this.readServiceWorker() : await this.readAsset(file);
+      const cache =
+        file === 'connectPwaMobile.html' || file === 'connectPwaMobile.js' || file === 'pwaInstallUi.js' || file === 'sw.js'
+          ? 'no-store'
+          : 'public, max-age=3600';
       res.writeHead(200, { 'Content-Type': this.contentType(file), 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff' });
       res.end(body);
       return;

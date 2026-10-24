@@ -347,6 +347,12 @@ h1 {
 
 .btn-primary:active { background: #26343b; }
 
+html.pwa-installed .pwa-install-only,
+html.pwa-installed #install-banner,
+html.pwa-installed [data-pwa-install] {
+  display: none !important;
+}
+
 .hub-footer {
   margin-top: 28px;
   padding-top: 16px;
