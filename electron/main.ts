@@ -6,6 +6,7 @@ import { PythonBridge } from './pythonBridge';
 import { registerPalletPrinter } from './palletPrinter';
 import { registerUpdates } from './updates';
 import type { Operation } from '../shared/protocol';
+import { registerMainProcessErrorHandlers } from './mainProcessLog';
 
 let mainWindow: BrowserWindow | null = null;
 let bridge: PythonBridge;
@@ -40,6 +41,7 @@ app.on('second-instance', () => {
 });
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.schwalbe.toolkit');
+  registerMainProcessErrorHandlers();
   const command = app.isPackaged ? path.join(process.resourcesPath, 'python', 'toolkit-backend.exe') : (process.env.PYTHON_PATH || 'python');
   bridge = new PythonBridge(command, app.isPackaged ? [] : ['-u', path.join(__dirname, '../python/main.py')], () => {
     mainWindow?.webContents.send('toolkit:backend-failed');

@@ -137,7 +137,9 @@ export function PalletVisionCollectorPage() {
               {state.events.slice(0, 5).map((evt, i) => <li key={evt.at + String(i)}>
                 {evt.type === 'upload_canceled'
                   ? `Upload canceled${evt.captureId ? ` (${evt.captureId})` : ''}`
-                  : `Upload lock released (${evt.reason})${evt.detail ? `: ${evt.detail}` : ''}`}
+                  : evt.type === 'process_error'
+                    ? `Process error: ${evt.message}`
+                    : `Upload lock released (${evt.reason})${evt.detail ? `: ${evt.detail}` : ''}`}
                 {' · '}{new Date(evt.at).toLocaleTimeString()}
               </li>)}
             </ul>

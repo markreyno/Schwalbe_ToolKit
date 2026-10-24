@@ -223,7 +223,7 @@ test.describe('PalletVision Server E2E', () => {
     }
   });
 
-  async function abortUploadMidStream(captureId: string) {
+  async function abortUploadMidStream(captureId: string, options?: { doubleDestroy?: boolean }) {
     const videoBuffer = await readFile(testVideoPath);
     const boundary = '----PalletVisionAbortTest';
     const chunks: Buffer[] = [];
@@ -254,10 +254,53 @@ test.describe('PalletVision Server E2E', () => {
       req.on('close', () => resolve());
       req.write(header);
       req.write(partialVideo);
+      req.socket?.destroy();
       req.destroy();
+      if (options?.doubleDestroy) {
+        setTimeout(() => {
+          req.socket?.destroy();
+          req.destroy();
+        }, 5);
+      }
     });
     await new Promise(resolve => setTimeout(resolve, 1200));
   }
+
+  test('socket reset mid-upload releases lock and follow-up upload succeeds', async () => {
+    const captureId = `cap_reset_${randomUUID()}`;
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+
+    try {
+      await abortUploadMidStream(captureId, { doubleDestroy: true });
+
+      const healthResp = await fetch(`${baseUrl}/api/health`, {
+        headers: { Authorization: `Bearer ${deviceToken}` }
+      });
+      const health = await healthResp.json();
+      expect(health.uploadBusy).toBe(false);
+
+      const videoBuffer = await readFile(testVideoPath);
+      const formData = new FormData();
+      formData.append('captureId', captureId);
+      formData.append('heightInches', '76');
+      formData.append('widthInches', '40');
+      formData.append('lengthInches', '48');
+      formData.append('capturedAt', new Date().toISOString());
+      formData.append('video', new Blob([videoBuffer], { type: 'video/webm' }), 'test.webm');
+
+      const uploadResp = await fetch(`${baseUrl}/api/pallets/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${deviceToken}` },
+        body: formData
+      });
+      expect(uploadResp.ok).toBe(true);
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+  });
 
   test('health reports upload idle immediately after abort and follow-up upload succeeds', async () => {
     const captureId = `cap_abort_immediate_${randomUUID()}`;
