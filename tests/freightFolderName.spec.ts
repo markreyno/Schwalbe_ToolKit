@@ -3,16 +3,18 @@ import path from 'node:path';
 import { sanitizeFreightUploadFolderName, resolveFreightUploadDirectory } from '../electron/freightFolderName';
 
 test.describe('freight upload folder names', () => {
-  const shipmentRoot = path.join('/data', 'freight', 'Acme_2026-01-15');
+  const shipmentRoot = path.resolve('data', 'freight', 'Acme_2026-01-15');
 
   test('empty input uses default shipment folder segment', () => {
     expect(sanitizeFreightUploadFolderName('', 'Acme_2026-01-15')).toBe('Acme_2026-01-15');
-    expect(resolveFreightUploadDirectory(shipmentRoot, '', 'Acme_2026-01-15')).toBe(shipmentRoot);
+    expect(resolveFreightUploadDirectory(shipmentRoot, '', 'Acme_2026-01-15')).toBe(
+      path.resolve(shipmentRoot)
+    );
   });
 
   test('custom name creates a subfolder under the shipment directory', () => {
     expect(resolveFreightUploadDirectory(shipmentRoot, 'Dock 3', 'Acme_2026-01-15')).toBe(
-      path.join(shipmentRoot, 'Dock 3')
+      path.resolve(shipmentRoot, 'Dock 3')
     );
   });
 
@@ -20,10 +22,10 @@ test.describe('freight upload folder names', () => {
     expect(sanitizeFreightUploadFolderName('..\\..\\evil', 'Acme_2026-01-15')).toBe('evil');
     expect(sanitizeFreightUploadFolderName('Dock/../Trailers', 'Acme_2026-01-15')).toBe('Trailers');
     expect(resolveFreightUploadDirectory(shipmentRoot, '../../outside', 'Acme_2026-01-15')).toBe(
-      path.join(shipmentRoot, 'outside')
+      path.resolve(shipmentRoot, 'outside')
     );
     expect(resolveFreightUploadDirectory(shipmentRoot, 'Dock/../Trailers', 'Acme_2026-01-15')).toBe(
-      path.join(shipmentRoot, 'Trailers')
+      path.resolve(shipmentRoot, 'Trailers')
     );
   });
 
