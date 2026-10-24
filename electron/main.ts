@@ -4,6 +4,7 @@ import { registerFreight } from './freight';
 import { registerPalletVision } from './palletvision';
 import { registerConnectPwa } from './connectPwa';
 import { resolveConnectPwaTools } from './toolPhoneUrls';
+import { PhoneTlsManager, startCaTrustServer } from './tls';
 import { PythonBridge } from './pythonBridge';
 import { registerPalletPrinter } from './palletPrinter';
 import { registerUpdates } from './updates';
@@ -56,14 +57,19 @@ app.whenReady().then(async () => {
   });
   registerPalletPrinter(() => mainWindow, bridge);
   registerUpdates(() => mainWindow);
-  const freight = await registerFreight(() => mainWindow);
-  const palletvision = await registerPalletVision(() => mainWindow);
-  await registerConnectPwa(() => mainWindow, {
+  const tlsManager = new PhoneTlsManager(app.getPath('userData'));
+  await tlsManager.load();
+  const caTrust = await startCaTrustServer(() => tlsManager.getCaPem());
+  const freight = await registerFreight(() => mainWindow, tlsManager);
+  const palletvision = await registerPalletVision(() => mainWindow, tlsManager);
+  await registerConnectPwa(() => mainWindow, tlsManager, {
     toolsForHost: async host => {
       const [freightStatus, palletvisionStatus] = await Promise.all([freight.status(), palletvision.status()]);
-      return resolveConnectPwaTools(host, freightStatus, palletvisionStatus);
+      const insecure = tlsManager.getAllowInsecureHttp() && !tlsManager.getServerTls();
+      return resolveConnectPwaTools(host, freightStatus, palletvisionStatus, insecure);
     }
   });
+  app.on('before-quit', () => { void caTrust.close(); });
   createWindow();
   app.on('activate', () => { if (!mainWindow) createWindow(); });
 });

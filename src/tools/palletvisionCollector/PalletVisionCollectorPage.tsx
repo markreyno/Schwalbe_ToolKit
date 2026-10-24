@@ -22,7 +22,7 @@ export function PalletVisionCollectorPage() {
 
   useEffect(() => { void action('status'); const timer = setInterval(() => { void window.toolkit.palletvision('status').then(setState).catch(e => setError(String(e))); }, 3000); return () => clearInterval(timer); }, []);
 
-  const url = address && state?.addresses.includes(address) ? state.qrUrl.replace(/^http:\/\/[^/]+/, address) : state?.qrUrl || '';
+  const url = address && state?.addresses.includes(address) ? state.qrUrl.replace(/^https?:\/\/[^/]+/, address.replace(/\/$/, '')) : state?.qrUrl || '';
   const [qr, setQr] = useState('');
   useEffect(() => { let active = true; if (url) { import('qrcode').then(q => q.toDataURL(url)).then(value => { if (active) setQr(value); }).catch(e => setError(String(e))); } return () => { active = false; }; }, [url]);
 

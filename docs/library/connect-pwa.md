@@ -42,12 +42,11 @@
 3. QR/link use your MagicDNS name or Tailscale IP (100.64.0.0/10).
 4. Optionally, the desktop may obtain a TLS certificate with `tailscale cert` for HTTPS on port **48735** (see desktop page when available).
 
-## HTTPS and PWA install limitations
+## HTTPS (required)
 
-- **Service workers** and full PWA install features require a **secure context** (HTTPS or localhost).
-- On **plain HTTP** over a LAN IP, iOS **Add to Home Screen** still works as a standalone web clip, but the service worker is **not** registered (`window.isSecureContext` is false).
-- Android **beforeinstallprompt** generally needs HTTPS; the hub still works in the browser.
-- Tailscale HTTPS is **optional** and **non-blocking**; if certificate setup fails, HTTP on port 48734 still works.
+All hub and tool links use **HTTPS on port 48734** (same port as before; the old separate Tailscale port **48735** is removed). See [Phone HTTPS](phone-https.md) for trusting the desktop CA (local network) or Tailscale MagicDNS setup.
+
+With HTTPS, Connect PWA gets a **secure context**: service workers and install prompts work after the phone trusts the certificate (local) or uses Tailscale’s public cert.
 
 ## Troubleshooting
 

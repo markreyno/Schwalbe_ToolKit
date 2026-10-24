@@ -29,8 +29,8 @@ async function startFreightShipment(browser: import('@playwright/test').Browser,
   await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
   const state = await page.evaluate(() => window.toolkit.freight('status'));
   const shipment = state.shipments.find(s => s.company === company)!;
-  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  const localUrl = shipment.url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48731');
+  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
+  const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
   await mobile.goto(localUrl);
   return { app, page, mobile, shipment, bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=', 'base64') };
 }
@@ -78,7 +78,7 @@ test('freight renamed upload lands in sanitized subfolder', async ({ browser, re
   expect(updated.lastUploadSubfolder).toBe('Trailers');
 
   const api = (route: string) =>
-    shipment.url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48731').replace('/?', route + '&');
+    shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731').replace('/?', route + '&');
   const hash = createHash('sha256').update(bytes).digest('hex');
   const bad = await request.post(api('/batch?'), {
     data: { pallets: 1, files: [{ name: 'x.png', size: bytes.length, hash }], folderName: 'CON' }

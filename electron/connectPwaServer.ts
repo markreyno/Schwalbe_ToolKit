@@ -1,14 +1,15 @@
-import http from 'node:http';
+import type http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import QRCode from 'qrcode';
-import { detectPreferredLanAddress, detectTailscale, isPrivateIP, listPrivateIpv4Addresses } from './networkAllowlist';
+import { detectPreferredLanAddress, detectTailscale, isPrivateIP } from './networkAllowlist';
 import type { ConnectPwaToolLink } from './toolPhoneUrls';
 import { isAllowedHubHost, normalizeHubHost } from './toolPhoneUrls';
+import type { PhoneTlsManager } from './tls/phoneTlsManager';
+import { startPhoneToolServer, type PhoneServerHandle } from './tls/phoneServer';
+import { buildPhoneAddressList, listPhoneUrlHosts } from './tls/phoneUrls';
 
 export const CONNECT_PWA_PORT = 48734;
 const FREIGHT_PORT = 48731;
@@ -17,20 +18,20 @@ const PALLETVISION_PORT = 48732;
 type DeviceRecord = { id: string; userAgent: string; ip: string; lastSeen: string };
 
 export class ConnectPwaServer {
-  private server?: http.Server;
-  private httpsServer?: https.Server;
+  private phoneHandle?: PhoneServerHandle;
   private port = 0;
-  private httpsPort = 0;
   private error = '';
   private preferredAddress = '';
   private manualAddress = '';
   private useTailscale = false;
   private devices = new Map<string, DeviceRecord>();
-  private httpsUrl = '';
-  private certAttempted = false;
   private assetDir = path.join(__dirname, 'connectPwa');
 
-  constructor(private settingsPath: string, private toolsForHost?: (host: string) => Promise<ConnectPwaToolLink[]>) {}
+  constructor(
+    private settingsPath: string,
+    private tlsManager: PhoneTlsManager,
+    private toolsForHost?: (host: string) => Promise<ConnectPwaToolLink[]>
+  ) {}
 
   async start() {
     this.preferredAddress = await detectPreferredLanAddress();
@@ -41,32 +42,50 @@ export class ConnectPwaServer {
     } catch (e: any) {
       if (e.code !== 'ENOENT') this.error = 'Could not read Connect PWA settings.';
     }
-    this.server = http.createServer((req, res) => {
-      void this.handle(req, res).catch(e => {
-        if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end(e instanceof Error ? e.message : String(e));
+    await this.restartPhoneListener();
+  }
+
+  async restartPhoneListener() {
+    if (this.phoneHandle) await this.phoneHandle.close();
+    this.phoneHandle = undefined;
+    this.port = 0;
+    await this.tlsManager.refreshServerTls(this.useTailscale);
+    const tls = this.tlsManager.getServerTls();
+    const allowInsecure = this.tlsManager.getAllowInsecureHttp();
+    if (!tls && !allowInsecure) {
+      const status = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
+      this.error = status.tlsError || 'HTTPS is required for phone links.';
+      return;
+    }
+    try {
+      this.phoneHandle = await startPhoneToolServer({
+        port: CONNECT_PWA_PORT,
+        tls,
+        allowInsecureHttp: allowInsecure,
+        handler: (req, res) => {
+          void this.handle(req, res).catch(e => {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'Content-Type': 'text/plain' });
+              res.end(e instanceof Error ? e.message : String(e));
+            }
+          });
         }
       });
-    });
-    await new Promise<void>(resolve => {
-      this.server!.once('error', e => { this.error = e.message; resolve(); });
-      this.server!.listen(CONNECT_PWA_PORT, '0.0.0.0', () => { this.port = CONNECT_PWA_PORT; resolve(); });
-    });
-    if (this.useTailscale) void this.tryTailscaleHttps();
+      this.port = this.phoneHandle.port;
+      this.error = '';
+    } catch (e: any) {
+      this.error = e.message || String(e);
+    }
   }
 
   stop() {
-    this.server?.close();
-    this.server?.closeAllConnections();
-    this.httpsServer?.close();
-    this.httpsServer?.closeAllConnections();
+    void this.phoneHandle?.close();
   }
 
   async setTailscaleMode(enabled?: boolean) {
     this.useTailscale = !!enabled;
     await this.persist();
-    if (this.useTailscale) void this.tryTailscaleHttps();
+    await this.restartPhoneListener();
   }
 
   async setManualAddress(address?: string) {
@@ -101,35 +120,9 @@ export class ConnectPwaServer {
     }
   }
 
-  private async tryTailscaleHttps() {
-    if (this.certAttempted) return;
-    this.certAttempted = true;
-    const tailscale = await detectTailscale();
-    if (!tailscale.hostname) return;
-    const certDir = path.join(path.dirname(this.settingsPath), 'connect-pwa-certs');
-    const certFile = path.join(certDir, 'cert.pem');
-    const keyFile = path.join(certDir, 'key.pem');
-    try {
-      await fs.mkdir(certDir, { recursive: true });
-      await promisify(execFile)('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, tailscale.hostname], { timeout: 20000 });
-      const [cert, key] = await Promise.all([fs.readFile(certFile), fs.readFile(keyFile)]);
-      const handler = (req: http.IncomingMessage, res: http.ServerResponse) => { void this.handle(req, res); };
-      this.httpsServer = https.createServer({ cert, key }, handler);
-      const httpsPort = CONNECT_PWA_PORT + 1;
-      await new Promise<void>((resolve, reject) => {
-        this.httpsServer!.once('error', reject);
-        this.httpsServer!.listen(httpsPort, '0.0.0.0', () => { this.httpsPort = httpsPort; resolve(); });
-      });
-      this.httpsUrl = `https://${tailscale.hostname}:${httpsPort}/`;
-    } catch {
-      this.httpsPort = 0;
-      this.httpsUrl = '';
-    }
-  }
-
-  private async probeLocal(port: number): Promise<boolean> {
+  private async probeHttps(port: number): Promise<boolean> {
     return new Promise(resolve => {
-      const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: 1500 }, res => {
+      const req = https.get({ host: '127.0.0.1', port, path: '/', timeout: 1500, rejectUnauthorized: false }, res => {
         res.resume();
         resolve(res.statusCode !== undefined && res.statusCode < 500);
       });
@@ -139,39 +132,37 @@ export class ConnectPwaServer {
   }
 
   private async reachability() {
-    const [freight, palletvision] = await Promise.all([this.probeLocal(FREIGHT_PORT), this.probeLocal(PALLETVISION_PORT)]);
+    const [freight, palletvision] = await Promise.all([this.probeHttps(FREIGHT_PORT), this.probeHttps(PALLETVISION_PORT)]);
     return { freightReachable: freight, palletvisionReachable: palletvision, desktopReachable: freight || palletvision };
   }
 
   private async buildAddressUrls(): Promise<string[]> {
-    const tailscale = await detectTailscale();
-    let hosts: string[] = [];
-    if (this.useTailscale && tailscale.hostname) hosts = [tailscale.hostname];
-    else if (this.useTailscale && tailscale.address) hosts = [tailscale.address];
-    else {
-      hosts = listPrivateIpv4Addresses(this.preferredAddress);
-      if (this.manualAddress && !hosts.includes(this.manualAddress)) hosts.unshift(this.manualAddress);
-    }
-    return hosts.map(h => `http://${h}:${this.port}`);
+    const insecure = this.tlsManager.getAllowInsecureHttp() && !this.tlsManager.getServerTls();
+    const { hosts } = await listPhoneUrlHosts({
+      useTailscale: this.useTailscale,
+      preferredLanAddress: this.preferredAddress,
+      manualAddress: this.manualAddress
+    });
+    return buildPhoneAddressList(hosts, this.port || CONNECT_PWA_PORT, insecure);
   }
 
   async status() {
     const tailscale = await detectTailscale();
     const addressUrls = await this.buildAddressUrls();
-    const base = addressUrls[0] || `http://127.0.0.1:${this.port}`;
+    const base = addressUrls[0] || this.tlsManager.buildToolBaseUrl('127.0.0.1', this.port || CONNECT_PWA_PORT);
     const reach = await this.reachability();
     const devices = [...this.devices.values()].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+    const phoneTls = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || this.manualAddress || '127.0.0.1');
     return {
       running: !!this.port,
       port: this.port,
-      httpsPort: this.httpsPort || undefined,
-      error: this.error,
+      error: this.error || phoneTls.tlsError,
       addresses: addressUrls,
       useTailscale: this.useTailscale,
       tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error },
-      qrUrl: this.httpsUrl || `${base}/`,
-      httpsUrl: this.httpsUrl || undefined,
-      qr: await QRCode.toDataURL(this.httpsUrl || `${base}/`),
+      qrUrl: `${base}/`,
+      qr: await QRCode.toDataURL(`${base}/`),
+      phoneTls,
       devices,
       reachability: { freight: reach.freightReachable, palletvision: reach.palletvisionReachable },
       manualAddress: this.manualAddress

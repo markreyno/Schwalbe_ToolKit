@@ -1,4 +1,5 @@
 import { isPrivateIP } from './networkAllowlist';
+import { buildPhoneOrigin, normalizePhoneHost } from './tls/phoneUrls';
 
 export const FREIGHT_PHONE_PORT = 48731;
 export const PALLETVISION_PHONE_PORT = 48732;
@@ -28,10 +29,7 @@ type PalletVisionStatusSlice = {
 };
 
 export function normalizeHubHost(host: string): string {
-  const trimmed = (host || '').trim().toLowerCase();
-  if (!trimmed) return '';
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed.slice(1, -1);
-  return trimmed.split(':')[0];
+  return normalizePhoneHost(host);
 }
 
 export function isAllowedHubHost(host: string): boolean {
@@ -43,7 +41,7 @@ export function isAllowedHubHost(host: string): boolean {
 }
 
 /** Match desktop QR address picker: use listed origin when host matches, else swap origin to the phone's host. */
-export function rewriteToolUrlForHost(toolUrl: string, requestHost: string, port: number, addressList: string[]): string {
+export function rewriteToolUrlForHost(toolUrl: string, requestHost: string, port: number, addressList: string[], insecure = false): string {
   const normalized = normalizeHubHost(requestHost);
   const listed = addressList.find(entry => {
     try {
@@ -52,14 +50,15 @@ export function rewriteToolUrlForHost(toolUrl: string, requestHost: string, port
       return false;
     }
   });
-  const origin = listed ? listed.replace(/\/$/, '') : `http://${normalized}:${port}`;
+  const origin = listed ? listed.replace(/\/$/, '') : buildPhoneOrigin(normalized, port, insecure);
   return toolUrl.replace(/^https?:\/\/[^/]+/i, origin);
 }
 
 export function resolveConnectPwaTools(
   requestHost: string,
   freight: FreightStatusSlice,
-  palletvision: PalletVisionStatusSlice
+  palletvision: PalletVisionStatusSlice,
+  insecure = false
 ): ConnectPwaToolLink[] {
   const host = normalizeHubHost(requestHost);
   const tools: ConnectPwaToolLink[] = [];
@@ -96,7 +95,7 @@ export function resolveConnectPwaTools(
         title: 'Freight Pictures',
         category: 'SHIPPING & WAREHOUSE',
         ready: true,
-        url: rewriteToolUrlForHost(openShipment.url, host, FREIGHT_PHONE_PORT, freight.addresses)
+        url: rewriteToolUrlForHost(openShipment.url, host, FREIGHT_PHONE_PORT, freight.addresses, insecure)
       });
     }
   }
@@ -123,7 +122,7 @@ export function resolveConnectPwaTools(
       title: 'PalletVision Data Collector',
       category: 'DATA COLLECTION',
       ready: true,
-      url: rewriteToolUrlForHost(palletvision.qrUrl, host, PALLETVISION_PHONE_PORT, palletvision.addresses)
+      url: rewriteToolUrlForHost(palletvision.qrUrl, host, PALLETVISION_PHONE_PORT, palletvision.addresses, insecure)
     });
   }
 

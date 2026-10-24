@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { PalletVisionServer } from '../electron/palletvisionServer';
+import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
 import { readFile, mkdir, rm, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,13 +45,15 @@ test.describe('PalletVision Server E2E', () => {
       '-y'
     ]);
 
-    server = new PalletVisionServer(settingsPath);
+    const tlsManager = await createTestPhoneTlsManager(testRoot);
+    server = new PalletVisionServer(settingsPath, tlsManager);
     await server.start();
 
     const status = await server.status();
     expect(status.running).toBe(true);
     expect(status.port).toBe(48732);
-    baseUrl = 'http://127.0.0.1:48732';
+    baseUrl = 'https://127.0.0.1:48732';
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
     const pairResp = await fetch(`${baseUrl}/api/pair`, { method: 'POST' });
     expect(pairResp.ok).toBe(true);

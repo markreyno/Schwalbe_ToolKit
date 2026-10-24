@@ -4,6 +4,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import http from 'node:http';
+import https from 'node:https';
+import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
 
 test.describe('Connect PWA server', () => {
   let server: ConnectPwaServer;
@@ -12,35 +14,36 @@ test.describe('Connect PWA server', () => {
   let baseUrl: string;
 
   const toolsResolver = async (host: string) => {
-    const isTailscale = host.includes('tailnet');
-    const origin = isTailscale ? `http://${host}` : `http://${host}`;
     return [
       {
         id: 'freight-pictures' as const,
         title: 'Freight Pictures',
         category: 'SHIPPING & WAREHOUSE',
         ready: true,
-        url: `${origin}:48731/?key=test-shipment`
+        url: `https://${host}:48731/?key=test-shipment`
       },
       {
         id: 'palletvision-collector' as const,
         title: 'PalletVision Data Collector',
         category: 'DATA COLLECTION',
         ready: true,
-        url: `${origin}:48732/`
+        url: `https://${host}:48732/`
       }
     ];
   };
 
   test.beforeAll(async () => {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     testRoot = path.resolve('.cache/connect-pwa-test', randomUUID());
     settingsPath = path.join(testRoot, 'settings.json');
-    server = new ConnectPwaServer(settingsPath, toolsResolver);
+    const tlsManager = await createTestPhoneTlsManager(testRoot);
+    server = new ConnectPwaServer(settingsPath, tlsManager, toolsResolver);
     await server.start();
     const status = await server.status();
     expect(status.running).toBe(true);
     expect(status.port).toBe(CONNECT_PWA_PORT);
-    baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
+    expect(status.qrUrl.startsWith('https://')).toBe(true);
+    baseUrl = `https://127.0.0.1:${CONNECT_PWA_PORT}`;
   });
 
   test.afterAll(async () => {
@@ -49,7 +52,7 @@ test.describe('Connect PWA server', () => {
   });
 
   test('serves manifest, service worker, and hub page', async () => {
-    const hub = await fetch(`${baseUrl}/`);
+    const hub = await fetch(`${baseUrl}/`, { agent: new https.Agent({ rejectUnauthorized: false }) } as RequestInit);
     expect(hub.ok).toBe(true);
     expect(hub.headers.get('content-type')).toContain('text/html');
     const html = await hub.text();
@@ -95,16 +98,16 @@ test.describe('Connect PWA server', () => {
     expect(resp.ok).toBe(true);
     const data = await resp.json();
     expect(data.host).toBe('192.168.77.3');
-    expect(data.tools[0].url).toBe('http://192.168.77.3:48731/?key=test-shipment');
-    expect(data.tools[1].url).toBe('http://192.168.77.3:48732/');
+    expect(data.tools[0].url).toBe('https://192.168.77.3:48731/?key=test-shipment');
+    expect(data.tools[1].url).toBe('https://192.168.77.3:48732/');
   });
 
   test('tools API resolves Tailscale MagicDNS host URLs', async () => {
     const resp = await fetch(`${baseUrl}/api/tools?host=desk.tailnet.ts.net`);
     expect(resp.ok).toBe(true);
     const data = await resp.json();
-    expect(data.tools[0].url).toBe('http://desk.tailnet.ts.net:48731/?key=test-shipment');
-    expect(data.tools[1].url).toBe('http://desk.tailnet.ts.net:48732/');
+    expect(data.tools[0].url).toBe('https://desk.tailnet.ts.net:48731/?key=test-shipment');
+    expect(data.tools[1].url).toBe('https://desk.tailnet.ts.net:48732/');
   });
 
   test('status API reports reachability flags', async () => {

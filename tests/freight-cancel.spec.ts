@@ -34,8 +34,8 @@ test('cancel upload removes partial files and releases the batch lock immediatel
 
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'Cancel Test Co')!;
-    const localUrl = shipment.url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48731');
-    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await mobile.goto(localUrl);
 
     const bytes = Buffer.from(
@@ -108,7 +108,7 @@ test('batch lock expires after FREIGHT_BATCH_TTL_MS', async ({ request }) => {
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'TTL Test Co')!;
     const api = (route: string) =>
-      shipment.url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48731').replace('/?', route + '&');
+      shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731').replace('/?', route + '&');
     const bytes = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=',
       'base64',
