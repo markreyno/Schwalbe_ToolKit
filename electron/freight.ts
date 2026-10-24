@@ -17,4 +17,5 @@ export async function registerFreight(window: () => BrowserWindow | null) {
   });
   app.on('before-quit', () => service.stop());
   app.on('window-all-closed', () => service.stop());
+  return service;
 }

@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import { detectPreferredLanAddress, detectTailscale, isPrivateIP, listPrivateIpv4Addresses } from './networkAllowlist';
+import type { ConnectPwaToolLink } from './toolPhoneUrls';
+import { isAllowedHubHost, normalizeHubHost } from './toolPhoneUrls';
 
 export const CONNECT_PWA_PORT = 48734;
 const FREIGHT_PORT = 48731;
@@ -28,7 +30,7 @@ export class ConnectPwaServer {
   private certAttempted = false;
   private assetDir = path.join(__dirname, 'connectPwa');
 
-  constructor(private settingsPath: string) {}
+  constructor(private settingsPath: string, private toolsForHost?: (host: string) => Promise<ConnectPwaToolLink[]>) {}
 
   async start() {
     this.preferredAddress = await detectPreferredLanAddress();
@@ -185,6 +187,7 @@ export class ConnectPwaServer {
     if (name.endsWith('.js')) return 'application/javascript; charset=utf-8';
     if (name.endsWith('.webmanifest')) return 'application/manifest+json; charset=utf-8';
     if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.css')) return 'text/css; charset=utf-8';
     return 'application/octet-stream';
   }
 
@@ -203,13 +206,34 @@ export class ConnectPwaServer {
       res.end(JSON.stringify(reach));
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/tools') {
+      const hostParam = url.searchParams.get('host') || '';
+      const host = normalizeHubHost(hostParam || req.headers.host?.split(':')[0] || '');
+      if (!isAllowedHubHost(host)) {
+        res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Invalid or missing host parameter.' }));
+        return;
+      }
+      if (!this.toolsForHost) {
+        res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Tool links are unavailable.' }));
+        return;
+      }
+      const tools = await this.toolsForHost(host);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ host, tools }));
+      return;
+    }
     const staticMap: Record<string, string> = {
       '/': 'connectPwaMobile.html',
+      '/hub.css': 'hub.css',
       '/connectPwaMobile.js': 'connectPwaMobile.js',
       '/manifest.webmanifest': 'manifest.webmanifest',
       '/sw.js': 'sw.js',
+      '/brand-logo.png': 'brand-logo.png',
       '/icon-192.png': 'icon-192.png',
-      '/icon-512.png': 'icon-512.png'
+      '/icon-512.png': 'icon-512.png',
+      '/apple-touch-icon.png': 'apple-touch-icon.png'
     };
     const file = staticMap[url.pathname];
     if (req.method === 'GET' && file) {
