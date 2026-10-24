@@ -3,6 +3,7 @@ import type { ToolkitAPI } from '../shared/protocol';
 const api: ToolkitAPI = {
   freight: (action, data) => ipcRenderer.invoke('toolkit:freight', action, data),
   palletvision: (action, data) => ipcRenderer.invoke('toolkit:palletvision', action, data),
+  connectPwa: (action, data) => ipcRenderer.invoke('toolkit:connect-pwa', action, data),
   updates: action => ipcRenderer.invoke('toolkit:updates', action),
   onUpdateState: callback => {
     const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state);
