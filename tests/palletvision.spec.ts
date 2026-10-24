@@ -40,9 +40,8 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     const local = (url: string) => url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48732');
     const apiUrl = (path: string) => new URL(path, local(state.qrUrl)).toString();
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair') && r.request().method() === 'POST');
     await mobile.goto(local(state.qrUrl));
-
-    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair'));
     await expect(mobile.getByRole('heading', { name: 'PalletVision Data Collector' })).toBeVisible();
     const pairResp = await pairReq;
     const pairData = await pairResp.json();
@@ -194,9 +193,8 @@ test('palletvision mobile upload existing video', async ({ browser }) => {
     let state = await page.evaluate(() => window.toolkit.palletvision('status'));
     const local = (url: string) => url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48732');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair') && r.request().method() === 'POST');
     await mobile.goto(local(state.qrUrl));
-
-    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair'));
     await expect(mobile.getByRole('heading', { name: 'PalletVision Data Collector' })).toBeVisible();
     const pairResp = await pairReq;
     const pairData = await pairResp.json();
@@ -272,9 +270,8 @@ test('palletvision mobile cancel upload cleans up and allows retry', async ({ br
       if (slowUpload) await new Promise(resolve => setTimeout(resolve, 2500));
       await route.continue().catch(() => {});
     });
+    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair') && r.request().method() === 'POST');
     await mobile.goto(local(state.qrUrl));
-
-    const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair'));
     await expect(mobile.getByRole('heading', { name: 'PalletVision Data Collector' })).toBeVisible();
     await pairReq;
 
