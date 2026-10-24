@@ -1,5 +1,7 @@
 import http from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { isPrivateIP } from '../networkAllowlist';
 import { buildIosMobileConfig } from './localCa';
 
@@ -52,14 +54,20 @@ async function handle(req: IncomingMessage, res: ServerResponse, getCaPem: () =>
     res.end(buildIosMobileConfig(ca));
     return;
   }
+  if (req.method === 'GET' && url.pathname === '/phoneHubNav.js') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(readFileSync(path.join(__dirname, '..', 'phoneHubNav.js'), 'utf8'));
+    return;
+  }
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trust Schwalbe ToolKit</title></head><body style="font-family:system-ui,sans-serif;padding:24px;max-width:640px;margin:auto">
+    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trust Schwalbe ToolKit</title></head><body style="font-family:system-ui,sans-serif;padding:24px 24px 24px 56px;max-width:640px;margin:auto">
 <h1>Trust this desktop (one time)</h1>
 <p>This page only distributes the desktop certificate authority. Phone tools use HTTPS on their usual ports after you trust this CA.</p>
 <p><a href="/ca.crt">Download CA certificate (.crt)</a> — Android: Settings → Security → Install certificate.</p>
 <p><a href="/ios.mobileconfig">Install iOS profile (.mobileconfig)</a> — then Settings → General → About → Certificate Trust Settings → enable full trust.</p>
 <p>Verify the fingerprint shown on the desktop matches before trusting.</p>
+<script src="/phoneHubNav.js"></script>
 </body></html>`);
     return;
   }
