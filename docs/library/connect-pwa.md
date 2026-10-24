@@ -23,9 +23,8 @@
 1. Open the link or scan the QR code.
 2. Confirm the status line shows desktop tools are reachable when possible.
 3. Tap a tool tile to open **Freight Pictures** or **PalletVision Data Collector** (links are not copied from the hub; use the tile).
-4. Install to the home screen:
-   - **iPhone:** Share → **Add to Home Screen**
-   - **Android:** Tap **Install app** when offered, or use the browser menu
+4. Use the **Home** arrow (top-left) on any phone tool page to return to this hub.
+5. Optional: add the hub to your home screen with the browser’s own menu (**Share → Add to Home Screen** on iPhone, or **Install** / menu on Android). The hub does not show install prompts in the page UI.
 
 ## Network modes
 
@@ -46,7 +45,7 @@
 
 All hub and tool links use **HTTPS on port 48734** (same port as before; the old separate Tailscale port **48735** is removed). See [Phone HTTPS](phone-https.md) for trusting the desktop CA (local network) or Tailscale MagicDNS setup.
 
-With HTTPS, Connect PWA gets a **secure context**: service workers and install prompts work after the phone trusts the certificate (local) or uses Tailscale’s public cert.
+With HTTPS, Connect PWA gets a **secure context**: the service worker and browser-driven install work after the phone trusts the certificate (local) or uses Tailscale’s public cert.
 
 ## Troubleshooting
 

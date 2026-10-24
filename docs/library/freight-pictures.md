@@ -23,6 +23,8 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 3. Enter the pallet count, check the confirmation box, then tap **Upload All**.
 4. On the folder confirmation step, review or edit **Folder name** (defaults to the shipment folder name so pictures land in the shipment directory). Use a different name to save this batch in a **subfolder inside that shipment folder** on the desktop. Tap **Upload** to start or **Cancel** to return without uploading.
 5. Wait for checksum verification on the desktop before the shipment completes.
+6. During an upload, use **Edit folder** to rename the desktop subfolder; pictures already saved and any still uploading use the new path.
+7. Tap the **Home** arrow (top-left, label “Home”) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel the upload first.
 
 ## Upload batch lock (1 minute)
 
@@ -32,8 +34,9 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 
 ## Cancel / delete / queue behavior
 
-- **Cancel upload** aborts in-flight files and cleans partial saves on the desktop.
-- Completed pictures stay in the folder; cancel does not delete finished files.
+- **Cancel upload** aborts in-flight files and cleans partial saves on the desktop. If this batch used a new subfolder and nothing remains in it, the empty subfolder is removed.
+- **Edit folder** during upload renames or moves the batch folder on the desktop and updates paths for files already saved.
+- Completed pictures from prior batches stay in the folder; cancel does not delete finished files from earlier uploads.
 - Reupload on the desktop generates a new link; existing pictures are not shown on the phone.
 
 ## Network troubleshooting

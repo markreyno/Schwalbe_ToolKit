@@ -85,26 +85,8 @@ async function refreshStatus() {
   }
 }
 
-let deferredPrompt = null;
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();
-  deferredPrompt = e;
-  document.getElementById('install-banner').style.display = 'block';
-});
-
-document.getElementById('install-button')?.addEventListener('click', async () => {
-  if (!deferredPrompt) return;
-  deferredPrompt.prompt();
-  await deferredPrompt.userChoice;
-  deferredPrompt = null;
-  document.getElementById('install-banner').style.display = 'none';
-});
-
 if (window.isSecureContext) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
-} else {
-  const note = document.getElementById('secure-note');
-  if (note) note.textContent = 'This page is not in a secure context. Open the hub using the HTTPS link from the desktop and trust the desktop CA (local network) if prompted.';
 }
 
 void refreshStatus();

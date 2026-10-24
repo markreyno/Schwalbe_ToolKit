@@ -448,6 +448,14 @@ export class PalletVisionServer {
       res.end(jsContent);
       return;
     }
+
+    if (req.method === 'GET' && url.pathname === '/phoneHubNav.js') {
+      const jsPath = path.join(__dirname, 'phoneHubNav.js');
+      const jsContent = await fs.readFile(jsPath, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(jsContent);
+      return;
+    }
     
     if (req.method === 'POST' && url.pathname === '/api/pair') {
       const deviceToken = token();

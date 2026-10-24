@@ -1,5 +1,6 @@
 import { MAX_FREIGHT_PICTURES, validateFreightImage } from './freightValidation';
 import { resolveFreightUploadDirectory } from './freightFolderName';
+import { readFileSync } from 'node:fs';
 import type http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,6 +15,8 @@ import { FREIGHT_PHONE_PORT } from './toolPhoneUrls';
 
 /** In-memory upload batch lock duration; overridable in tests via FREIGHT_BATCH_TTL_MS. */
 export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0 ? Number(process.env.FREIGHT_BATCH_TTL_MS) : 60000;
+
+const phoneHubNavJs = () => readFileSync(path.join(__dirname, 'phoneHubNav.js'), 'utf8');
 
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
@@ -87,6 +90,14 @@ export class FreightServer {
     return next;
   }
   async setRoot(root: string) { if ((this.batch && this.batch.expires > Date.now()) || this.writing) throw new Error('Finish the active upload first.'); await fs.access(root); this.root = root; await this.persist(); }
+  private async removeEmptyUploadSubfolder(uploadDir: string, shipmentFolder: string) {
+    const root = path.resolve(shipmentFolder);
+    const dir = path.resolve(uploadDir);
+    if (dir === root || !dir.startsWith(root + path.sep)) return;
+    try {
+      if ((await fs.readdir(dir)).length === 0) await fs.rmdir(dir);
+    } catch { /* not empty or missing */ }
+  }
   private async abandonBatch() {
     const batch = this.batch;
     this.batch = undefined;
@@ -100,6 +111,38 @@ export class FreightServer {
         if (name.includes(prefix) && name.endsWith('.part')) await fs.unlink(path.join(batch.uploadDir, name));
       }
     } catch { /* folder may be missing */ }
+    await this.removeEmptyUploadSubfolder(batch.uploadDir, batch.shipment.folder);
+  }
+  private async renameBatchFolder(batch: Batch, shipment: Shipment, folderNameInput: string) {
+    if (this.writing) throw new Error('Another picture is being saved. Retry.');
+    const defaultFolderName = path.basename(shipment.folder);
+    const oldDir = batch.uploadDir;
+    const newDir = resolveFreightUploadDirectory(shipment.folder, folderNameInput, defaultFolderName);
+    if (path.resolve(newDir) === path.resolve(oldDir)) {
+      return { uploadFolder: batch.uploadFolderLabel };
+    }
+    await fs.mkdir(newDir, { recursive: true });
+    const prefix = `_${batch.id.slice(0, 8)}_`;
+    for (const f of batch.files) {
+      if (f.saved) {
+        const dest = path.join(newDir, path.basename(f.saved));
+        if (path.resolve(f.saved) !== path.resolve(dest)) {
+          await fs.rename(f.saved, dest);
+          f.saved = dest;
+        }
+      }
+    }
+    try {
+      for (const name of await fs.readdir(oldDir)) {
+        if (name.includes(prefix) && name.endsWith('.part')) {
+          await fs.rename(path.join(oldDir, name), path.join(newDir, name));
+        }
+      }
+    } catch { /* old folder may be missing */ }
+    await this.removeEmptyUploadSubfolder(oldDir, shipment.folder);
+    batch.uploadDir = newDir;
+    batch.uploadFolderLabel = path.basename(newDir);
+    return { uploadFolder: batch.uploadFolderLabel };
   }
   async create(company: string, date: string) {
     if (!this.root) throw new Error('Choose the desktop storage folder first.');
@@ -137,6 +180,11 @@ export class FreightServer {
       return;
     }
     const url = new URL(req.url || '/', 'http://local');
+    if (req.method === 'GET' && url.pathname === '/phoneHubNav.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(phoneHubNavJs());
+      return;
+    }
     const key = url.searchParams.get('key');
     const shipment = this.shipments.find(s => s.token === key);
     const master = key === this.master;
@@ -190,6 +238,11 @@ export class FreightServer {
     if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
     batch.expires = Date.now() + FREIGHT_BATCH_TTL_MS;
     if (req.method === 'POST' && url.pathname === '/cancel') { await this.abandonBatch(); json({ canceled: true }); return; }
+    if (req.method === 'POST' && url.pathname === '/rename-folder') {
+      const data = JSON.parse((await this.body(req, 4096)).toString());
+      json(await this.renameBatchFolder(batch, shipment, typeof data.folderName === 'string' ? data.folderName : batch.uploadFolderLabel));
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/file') {
       if (this.writing) throw new Error('Another picture is being saved. Retry.');
       const index = Number(url.searchParams.get('index')); const f = batch.files[index]; if (!Number.isInteger(index) || !f) throw new Error('Invalid picture.');

@@ -88,3 +88,55 @@ test('freight renamed upload lands in sanitized subfolder', async ({ browser, re
   await mobile.close();
   await app.close();
 });
+
+test('cancel upload removes empty batch subfolder', async ({ browser }) => {
+  const { app, mobile, shipment, bytes } = await startFreightShipment(browser, 'Subfolder Cancel Co');
+  await stagePictures(mobile, bytes, 2);
+  let releaseFirst: (() => void) | undefined;
+  await mobile.route(/\/file\?/, async route => {
+    if (route.request().url().includes('index=0')) {
+      await new Promise<void>(resolve => { releaseFirst = resolve; });
+    }
+    await route.continue();
+  });
+  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+  await mobile.locator('#folder-name').fill('Dock A');
+  await mobile.locator('#confirm-upload').click();
+  await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
+  releaseFirst?.();
+  await expect(mobile.locator('#message')).toContainText('Upload canceled');
+  const rootEntries = await readdir(shipment.folder);
+  expect(rootEntries).toHaveLength(0);
+  await mobile.unroute(/\/file\?/);
+  await mobile.close();
+  await app.close();
+});
+
+test('rename folder during upload moves saved files', async ({ browser }) => {
+  const { app, mobile, shipment, bytes } = await startFreightShipment(browser, 'Mid Rename Co');
+  await stagePictures(mobile, bytes, 2);
+  let releaseSecond: (() => void) | undefined;
+  await mobile.route(/\/file\?/, async route => {
+    if (route.request().url().includes('index=1')) {
+      await new Promise<void>(resolve => { releaseSecond = resolve; });
+    }
+    await route.continue();
+  });
+  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+  await mobile.locator('#folder-name').fill('Lane 1');
+  await mobile.locator('#confirm-upload').click();
+  await expect(mobile.getByRole('button', { name: 'Edit folder', exact: true })).toBeVisible();
+  await mobile.getByRole('button', { name: 'Edit folder', exact: true }).click();
+  await mobile.locator('#folder-rename-input').fill('Lane 2');
+  await mobile.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(mobile.locator('#message')).toContainText('Lane 2');
+  const lane2 = path.join(shipment.folder, 'Lane 2');
+  await expect.poll(async () => (await readdir(lane2)).length).toBe(1);
+  releaseSecond?.();
+  await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
+  expect(await readdir(lane2)).toHaveLength(2);
+  expect(await readdir(shipment.folder)).toEqual(['Lane 2']);
+  await mobile.unroute(/\/file\?/);
+  await mobile.close();
+  await app.close();
+});

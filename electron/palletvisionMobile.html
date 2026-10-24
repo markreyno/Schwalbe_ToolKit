@@ -93,5 +93,17 @@ footer { font-size: 8px; letter-spacing: 1.3px; color: #9aa4b1; border-top: 1px 
 <footer>MADE FOR A SMOOTHER WORKDAY</footer>
 </main>
 <script src="palletvisionMobile.js"></script>
+<script src="/phoneHubNav.js"></script>
+<script>
+if (window.phoneHubNavSetBeforeLeave) {
+  window.phoneHubNavSetBeforeLeave(() => {
+    const busy = typeof activeUploadXhr !== 'undefined' && activeUploadXhr
+      || (typeof uploadQueue !== 'undefined' && uploadQueue.some(c => c && (c.status === 'uploading' || c.status === 'pending-active' || c.status === 'queued')));
+    if (!busy) return true;
+    if (!confirm('An upload is in progress. Leave anyway? The upload may fail on this page.')) return false;
+    return true;
+  });
+}
+</script>
 </body>
 </html>

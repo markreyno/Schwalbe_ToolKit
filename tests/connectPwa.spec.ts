@@ -58,6 +58,8 @@ test.describe('Connect PWA server', () => {
     const html = await hub.text();
     expect(html).toContain('Schwalbe ToolKit');
     expect(html).toContain('/hub.css');
+    expect(html).not.toContain('Add to Home Screen');
+    expect(html).not.toContain('install-banner');
 
     const css = await fetch(`${baseUrl}/hub.css`);
     expect(css.ok).toBe(true);
