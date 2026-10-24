@@ -9,7 +9,22 @@ const out = process.env.CONNECT_PWA_SCREENSHOT_OUT;
 test('capture connect hub screenshot', async ({ browser }) => {
   if (!out) test.skip();
   const testRoot = path.resolve('.cache/connect-pwa-screenshot', randomUUID());
-  const server = new ConnectPwaServer(path.join(testRoot, 'settings.json'));
+  const server = new ConnectPwaServer(path.join(testRoot, 'settings.json'), async host => [
+    {
+      id: 'freight-pictures',
+      title: 'Freight Pictures',
+      category: 'SHIPPING & WAREHOUSE',
+      ready: true,
+      url: `http://${host}:48731/?key=demo`
+    },
+    {
+      id: 'palletvision-collector',
+      title: 'PalletVision Data Collector',
+      category: 'DATA COLLECTION',
+      ready: true,
+      url: `http://${host}:48732/`
+    }
+  ]);
   await server.start();
   const page = await browser.newPage({
     viewport: { width: 390, height: 844 },

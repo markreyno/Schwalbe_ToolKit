@@ -177,6 +177,48 @@ h1 {
   box-shadow: 0 8px 25px #1a394b0d;
 }
 
+.tool-tile--blocked {
+  opacity: 0.92;
+  cursor: default;
+}
+
+.tool-notice {
+  color: #8d5a18;
+  background: #fff8ee;
+  border: 1px solid #f1d1bf;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 4px;
+}
+
+.tool-link-url {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #72828d;
+  word-break: break-all;
+  margin: 10px 0 0;
+}
+
+.tool-copy {
+  margin-top: 10px;
+  min-height: 44px;
+  width: 100%;
+  background: var(--brand-blue);
+  color: var(--brand-ink);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tool-copy:active {
+  background: #c2e2f2;
+}
+
+.badge.muted {
+  background: #f0f2f5;
+  color: #87909d;
+}
+
 .tool-tile-top {
   display: flex;
   align-items: center;

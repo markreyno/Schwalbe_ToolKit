@@ -1,56 +1,77 @@
-const FREIGHT_PORT = 48731;
-const PALLETVISION_PORT = 48732;
-
 const ICONS = {
   camera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>',
   video: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
   arrow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg>'
 };
 
-function hostBase() {
-  const { protocol, hostname } = location;
-  return `${protocol}//${hostname}`;
+const TOOL_META = {
+  'freight-pictures': { icon: 'camera', desc: 'Collect pallet photos for the active shipment on the desktop.' },
+  'palletvision-collector': { icon: 'video', desc: 'Record pallet videos and enter measured dimensions.' }
+};
+
+let desktopReachable = false;
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/"/g, '&quot;');
 }
 
-function tileMarkup({ href, title, category, desc, icon }) {
-  return `<a class="tool-tile" href="${href}">
-    <div class="tool-tile-top">
-      <span class="tool-icon">${ICONS[icon]}</span>
-      <span class="badge green">Available</span>
+function tileShell({ title, category, body, footer, tag }) {
+  return `<div class="tool-tile-top">
+      <span class="tool-icon">${ICONS[tag.icon]}</span>
+      <span class="badge ${tag.ready ? 'green' : 'muted'}">${tag.ready ? 'Ready' : 'Setup needed'}</span>
     </div>
-    <p class="card-category">${category}</p>
-    <h3>${title}</h3>
-    <p class="card-description">${desc}</p>
-    <div class="card-bottom"><span>Open tool</span>${ICONS.arrow}</div>
-  </a>`;
+    <p class="card-category">${escapeHtml(category)}</p>
+    <h3>${escapeHtml(title)}</h3>
+    ${body}
+    ${footer || ''}`;
 }
 
-function renderTiles(reachable) {
-  const base = hostBase();
+function renderToolTiles(tools) {
   const tiles = document.getElementById('tiles');
-  tiles.innerHTML = [
-    tileMarkup({
-      href: `${base}:${FREIGHT_PORT}/`,
-      title: 'Freight Pictures',
-      category: 'SHIPPING & WAREHOUSE',
-      desc: 'Collect pallet photos. Use the master or shipment link from the desktop if prompted for a key.',
-      icon: 'camera'
-    }),
-    tileMarkup({
-      href: `${base}:${PALLETVISION_PORT}/`,
-      title: 'PalletVision Data Collector',
-      category: 'DATA COLLECTION',
-      desc: 'Record pallet videos and enter measured dimensions.',
-      icon: 'video'
-    })
-  ].join('');
-  if (!reachable) {
-    tiles.querySelectorAll('.tool-tile').forEach(a => {
-      a.addEventListener('click', e => {
+  tiles.innerHTML = tools.map(tool => {
+    const meta = TOOL_META[tool.id] || { icon: 'camera', desc: '' };
+    if (tool.ready && tool.url) {
+      const body = `<p class="card-description">${escapeHtml(meta.desc)}</p>
+        <p class="tool-link-url" title="${escapeHtml(tool.url)}">${escapeHtml(tool.url)}</p>
+        <button type="button" class="tool-copy" data-copy="${escapeHtml(tool.url)}">Copy link</button>`;
+      const footer = `<div class="card-bottom"><span>Open tool</span>${ICONS.arrow}</div>`;
+      return `<a class="tool-tile" href="${escapeHtml(tool.url)}" target="_self">${tileShell({ title: tool.title, category: tool.category, body, footer, tag: { icon: meta.icon, ready: true } })}</a>`;
+    }
+    const body = `<p class="card-description tool-notice">${escapeHtml(tool.message || 'This tool is not ready on the desktop yet.')}</p>`;
+    return `<div class="tool-tile tool-tile--blocked" aria-disabled="true">${tileShell({ title: tool.title, category: tool.category, body, footer: '', tag: { icon: meta.icon, ready: false } })}</div>`;
+  }).join('');
+
+  tiles.querySelectorAll('.tool-copy').forEach(button => {
+    button.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const value = button.getAttribute('data-copy');
+      if (!value) return;
+      void navigator.clipboard.writeText(value).then(() => {
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy link'; }, 2000);
+      });
+    });
+  });
+
+  if (!desktopReachable) {
+    tiles.querySelectorAll('a.tool-tile').forEach(link => {
+      link.addEventListener('click', e => {
         if (!confirm('Desktop tools may be unreachable right now. Open anyway?')) e.preventDefault();
       });
     });
   }
+}
+
+async function loadTools() {
+  const host = location.hostname;
+  const r = await fetch(`/api/tools?host=${encodeURIComponent(host)}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error('Could not load tool links.');
+  const data = await r.json();
+  renderToolTiles(data.tools || []);
 }
 
 async function refreshStatus() {
@@ -59,6 +80,7 @@ async function refreshStatus() {
   try {
     const r = await fetch('/api/status', { cache: 'no-store' });
     const data = await r.json();
+    desktopReachable = data.desktopReachable;
     const ok = data.desktopReachable;
     dot.className = 'status-dot ' + (ok ? 'ok' : 'warn');
     const parts = [];
@@ -68,11 +90,13 @@ async function refreshStatus() {
     if (data.palletvisionReachable) parts.push('PalletVision server up.');
     else parts.push('PalletVision server not responding.');
     text.textContent = parts.join(' ');
-    renderTiles(ok);
+    await loadTools();
   } catch {
     dot.className = 'status-dot warn';
     text.textContent = 'Could not check desktop status.';
-    renderTiles(false);
+    desktopReachable = false;
+    const tiles = document.getElementById('tiles');
+    tiles.innerHTML = '<p class="tool-notice">Tool links are unavailable right now.</p>';
   }
 }
 
@@ -98,6 +122,5 @@ if (window.isSecureContext) {
   if (note) note.textContent = 'You are on plain HTTP. iOS Add to Home Screen works as a web clip, but service worker offline caching is disabled until you use HTTPS (optional Tailscale certificate on the desktop).';
 }
 
-renderTiles(false);
 void refreshStatus();
 setInterval(refreshStatus, 15000);

@@ -1,8 +1,13 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { ConnectPwaServer } from './connectPwaServer';
-export async function registerConnectPwa(window: () => BrowserWindow | null) {
-  const service = new ConnectPwaServer(path.join(app.getPath('userData'), 'connect-pwa.json'));
+import type { ConnectPwaToolLink } from './toolPhoneUrls';
+
+export async function registerConnectPwa(
+  window: () => BrowserWindow | null,
+  deps?: { toolsForHost: (host: string) => Promise<ConnectPwaToolLink[]> }
+) {
+  const service = new ConnectPwaServer(path.join(app.getPath('userData'), 'connect-pwa.json'), deps?.toolsForHost);
   await service.start();
 
   ipcMain.handle('toolkit:connect-pwa', async (event, action: string, data: any) => {
