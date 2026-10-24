@@ -28,7 +28,7 @@ declare global { interface Window { toolkit: ToolkitAPI } }
 
 export type PalletPreview = { company: string; labels: string[]; labelCount: number; lastLabel: string };
 
-export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; url: string; qr: string }[] };
+export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string; url: string; qr: string }[] };
 
 export type PalletVisionEvent =
   | { type: 'upload_canceled'; captureId?: string; at: string }

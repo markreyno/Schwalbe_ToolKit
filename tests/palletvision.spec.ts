@@ -203,14 +203,8 @@ test('palletvision mobile upload existing video', async ({ browser }) => {
     const testVideoPath = path.join(__dirname, 'fixtures', 'test-pallet.webm');
     const videoBuffer = await readFile(testVideoPath);
 
-    await mobile.getByRole('button', { name: 'Upload Existing Video' }).click();
-    const fileInput = mobile.locator('#video-file-input');
-    await fileInput.setInputFiles({ name: 'test-video.webm', mimeType: 'video/webm', buffer: videoBuffer });
-
-    await expect(mobile.locator('#playback')).toBeVisible({ timeout: 3000 });
-    await expect(mobile.getByRole('button', { name: 'Continue' })).toBeVisible();
-    
-    await mobile.getByRole('button', { name: 'Continue' }).click();
+    await mobile.locator('#video-file-input').setInputFiles({ name: 'test-video.webm', mimeType: 'video/webm', buffer: videoBuffer });
+    await expect(mobile.getByRole('heading', { name: 'Pallet Measurements' })).toBeVisible({ timeout: 5000 });
     await mobile.locator('#height').fill('72');
     await mobile.locator('#width').fill('40');
     await mobile.locator('#length').fill('48');
@@ -278,9 +272,8 @@ test('palletvision mobile cancel upload cleans up and allows retry', async ({ br
     const testVideoPath = path.join(__dirname, 'fixtures', 'test-pallet.webm');
     const videoBuffer = await readFile(testVideoPath);
 
-    await mobile.getByRole('button', { name: 'Upload Existing Video' }).click();
     await mobile.locator('#video-file-input').setInputFiles({ name: 'test-video.webm', mimeType: 'video/webm', buffer: videoBuffer });
-    await mobile.getByRole('button', { name: 'Continue' }).click();
+    await expect(mobile.getByRole('heading', { name: 'Pallet Measurements' })).toBeVisible({ timeout: 5000 });
     await mobile.locator('#height').fill('70');
     await mobile.getByRole('button', { name: 'Save & Upload' }).click();
 

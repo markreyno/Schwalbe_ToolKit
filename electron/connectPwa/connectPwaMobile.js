@@ -6,7 +6,7 @@ const ICONS = {
 
 const TOOL_META = {
   'freight-pictures': { icon: 'camera', desc: 'Collect pallet photos for the active shipment on the desktop.' },
-  'palletvision-collector': { icon: 'video', desc: 'Record pallet videos and enter measured dimensions.' }
+  'palletvision-collector': { icon: 'video', desc: 'Upload pallet videos and enter measured dimensions.' }
 };
 
 let desktopReachable = false;
@@ -34,28 +34,13 @@ function renderToolTiles(tools) {
   tiles.innerHTML = tools.map(tool => {
     const meta = TOOL_META[tool.id] || { icon: 'camera', desc: '' };
     if (tool.ready && tool.url) {
-      const body = `<p class="card-description">${escapeHtml(meta.desc)}</p>
-        <p class="tool-link-url" title="${escapeHtml(tool.url)}">${escapeHtml(tool.url)}</p>
-        <button type="button" class="tool-copy" data-copy="${escapeHtml(tool.url)}">Copy link</button>`;
+      const body = `<p class="card-description">${escapeHtml(meta.desc)}</p>`;
       const footer = `<div class="card-bottom"><span>Open tool</span>${ICONS.arrow}</div>`;
       return `<a class="tool-tile" href="${escapeHtml(tool.url)}" target="_self">${tileShell({ title: tool.title, category: tool.category, body, footer, tag: { icon: meta.icon, ready: true } })}</a>`;
     }
     const body = `<p class="card-description tool-notice">${escapeHtml(tool.message || 'This tool is not ready on the desktop yet.')}</p>`;
     return `<div class="tool-tile tool-tile--blocked" aria-disabled="true">${tileShell({ title: tool.title, category: tool.category, body, footer: '', tag: { icon: meta.icon, ready: false } })}</div>`;
   }).join('');
-
-  tiles.querySelectorAll('.tool-copy').forEach(button => {
-    button.addEventListener('click', e => {
-      e.preventDefault();
-      e.stopPropagation();
-      const value = button.getAttribute('data-copy');
-      if (!value) return;
-      void navigator.clipboard.writeText(value).then(() => {
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = 'Copy link'; }, 2000);
-      });
-    });
-  });
 
   if (!desktopReachable) {
     tiles.querySelectorAll('a.tool-tile').forEach(link => {

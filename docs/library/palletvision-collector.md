@@ -17,8 +17,8 @@ Collect **training data**: pallet videos plus **measured** height, width, and le
 
 ## Phone usage
 
-1. Open the pairing link and tap **Start New Pallet**.
-2. Record a short video walking around the pallet.
+1. Open the pairing link on your phone.
+2. Tap **Choose video** and pick an existing clip from your gallery or files (no in-page camera recording).
 3. Enter measured dimensions (inches), optional notes/reference ID.
 4. Tap **Save & Upload**.
 
