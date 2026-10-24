@@ -20,8 +20,9 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 
 1. Scan the shipment QR, master QR, or paste the link.
 2. Add up to **26 pictures** per upload batch.
-3. Enter the pallet count and confirm, then **Upload All**.
-4. Wait for checksum verification on the desktop before the shipment completes.
+3. Enter the pallet count, check the confirmation box, then tap **Upload All**.
+4. On the folder confirmation step, review or edit **Folder name** (defaults to the shipment folder name so pictures land in the shipment directory). Use a different name to save this batch in a **subfolder inside that shipment folder** on the desktop. Tap **Upload** to start or **Cancel** to return without uploading.
+5. Wait for checksum verification on the desktop before the shipment completes.
 
 ## Upload batch lock (1 minute)
 

@@ -1,16 +1,14 @@
-/* global indexedDB, MediaRecorder, FormData, Blob */
+/* global indexedDB, FormData, Blob */
 let db;
 let deviceToken;
 let currentCapture = null;
+let selectedVideoFile = null;
 let uploadQueue = [];
 let activeUploadXhr = null;
 let activeUploadCaptureId = null;
 let uploadProgressPct = 0;
 let queueRunnerPromise = null;
 let cancelUploadRequested = false;
-let stream = null;
-let mediaRecorder = null;
-let recordedChunks = [];
 
 const UPLOADABLE = new Set(['queued']);
 const ACTIVE_STATUSES = new Set(['uploading', 'pending-active']);
@@ -249,21 +247,9 @@ async function loadPallets() {
   }
 }
 
-el('new-pallet').onclick = () => {
-  currentCapture = {
-    captureId: 'cap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-    capturedAt: new Date().toISOString()
-  };
-  el('home').hidden = true;
-  el('record').hidden = false;
-};
-
-el('upload-video-btn').onclick = () => {
-  el('video-file-input').click();
-};
-
 el('video-file-input').onchange = async (e) => {
   const file = e.target.files?.[0];
+  e.target.value = '';
   if (!file) return;
 
   if (!file.type.startsWith('video/')) {
@@ -280,75 +266,19 @@ el('video-file-input').onchange = async (e) => {
     captureId: 'cap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     capturedAt: new Date().toISOString()
   };
-
-  recordedChunks = [file];
-
-  el('playback').src = URL.createObjectURL(file);
-  el('playback').hidden = false;
-  el('review-actions').hidden = false;
-  el('start-record').hidden = true;
-
+  selectedVideoFile = file;
+  el('selected-video').textContent = 'Video: ' + file.name;
   el('home').hidden = true;
-  el('record').hidden = false;
-
-  message('Video loaded. Review and continue to measurements.');
-  e.target.value = '';
-};
-
-el('start-record').onclick = async () => {
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
-      audio: false
-    });
-    el('camera-preview').srcObject = stream;
-    el('camera-preview').style.display = 'block';
-    recordedChunks = [];
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) recordedChunks.push(e.data);
-    };
-    mediaRecorder.onstop = () => {
-      const blob = new Blob(recordedChunks, { type: 'video/webm' });
-      el('playback').src = URL.createObjectURL(blob);
-      el('camera-preview').style.display = 'none';
-      el('review-actions').hidden = false;
-      stream.getTracks().forEach((t) => t.stop());
-      stream = null;
-    };
-    mediaRecorder.start();
-    el('start-record').hidden = true;
-    el('stop-record').hidden = false;
-    message('Recording... Keep the entire pallet visible.');
-  } catch (e) {
-    message('Camera access denied: ' + e.message, true);
-  }
-};
-
-el('stop-record').onclick = () => {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-    el('stop-record').hidden = true;
-    el('playback').hidden = false;
-  }
-};
-
-el('retake').onclick = () => {
-  el('playback').hidden = true;
-  el('review-actions').hidden = true;
-  el('start-record').hidden = false;
-  recordedChunks = [];
-  el('playback').src = '';
-};
-
-el('continue').onclick = () => {
-  el('record').hidden = true;
   el('measure').hidden = false;
+  message('Enter measurements for this video.');
 };
 
 el('back').onclick = () => {
   el('measure').hidden = true;
-  el('record').hidden = false;
+  el('home').hidden = false;
+  selectedVideoFile = null;
+  currentCapture = null;
+  el('selected-video').textContent = '';
 };
 
 el('save').onclick = async () => {
@@ -359,14 +289,12 @@ el('save').onclick = async () => {
     message('Enter valid positive dimensions.', true);
     return;
   }
-  if (recordedChunks.length === 0) {
-    message('No video recorded.', true);
+  if (!selectedVideoFile) {
+    message('Choose a video first.', true);
     return;
   }
 
-  const videoBlob = recordedChunks[0] instanceof File
-    ? recordedChunks[0]
-    : new Blob(recordedChunks, { type: 'video/webm' });
+  const videoBlob = selectedVideoFile;
 
   const capture = {
     ...currentCapture,
@@ -387,6 +315,9 @@ el('save').onclick = async () => {
     message('Pallet saved locally. Queued for upload.');
     el('measure').hidden = true;
     el('home').hidden = false;
+    selectedVideoFile = null;
+    currentCapture = null;
+    el('selected-video').textContent = '';
     el('height').value = '';
     el('notes').value = '';
     el('reference').value = '';

@@ -22,7 +22,7 @@
 
 1. Open the link or scan the QR code.
 2. Confirm the status line shows desktop tools are reachable when possible.
-3. Tap **Freight Pictures** or **PalletVision Data Collector**.
+3. Tap a tool tile to open **Freight Pictures** or **PalletVision Data Collector** (links are not copied from the hub; use the tile).
 4. Install to the home screen:
    - **iPhone:** Share → **Add to Home Screen**
    - **Android:** Tap **Install app** when offered, or use the browser menu
