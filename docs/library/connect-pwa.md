@@ -24,7 +24,7 @@
 2. Confirm the status line shows desktop tools are reachable when possible.
 3. Tap a tool tile to open **Freight Pictures** or **PalletVision Data Collector** (links are not copied from the hub; use the tile).
 4. Use the **Home** arrow (top-left) on any phone tool page to return to this hub.
-5. Optional: add the hub to your home screen with the browser’s own menu (**Share → Add to Home Screen** on iPhone, or **Install** / menu on Android). The hub does not show install prompts in the page UI.
+5. Optional: add the hub to your home screen with the browser’s own menu (**Share → Add to Home Screen** on iPhone, or **Install** / menu on Android). The installed app does not show install steps; if an older copy still shows them, close and reopen the hub once after updating the desktop toolkit so the service worker can refresh.
 
 ## Network modes
 
