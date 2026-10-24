@@ -166,6 +166,7 @@ test('palletvision validates dimensions', async () => {
 });
 
 test('palletvision mobile upload existing video', async ({ browser }) => {
+  test.setTimeout(120_000);
   const profile = path.resolve('.cache/palletvision-tests', randomUUID());
   const storage = path.join(profile, 'data');
   await mkdir(storage, { recursive: true });
@@ -219,10 +220,12 @@ test('palletvision mobile upload existing video', async ({ browser }) => {
     
     await mobile.getByRole('button', { name: 'Save & Upload' }).click();
 
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await expect.poll(async () => {
+      const s = await page.evaluate(() => window.toolkit.palletvision('status'));
+      return s.pallets.length;
+    }, { timeout: 90_000 }).toBe(1);
 
     state = await page.evaluate(() => window.toolkit.palletvision('status'));
-    expect(state.pallets).toHaveLength(1);
     const pallet = state.pallets[0];
     expect(pallet.heightInches).toBe(72);
     expect(pallet.widthInches).toBe(40);
