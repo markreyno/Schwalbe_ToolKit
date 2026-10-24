@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { registerFreight } from './freight';
 import { registerPalletVision } from './palletvision';
+import { registerConnectPwa } from './connectPwa';
 import { PythonBridge } from './pythonBridge';
 import { registerPalletPrinter } from './palletPrinter';
 import { registerUpdates } from './updates';
@@ -56,6 +57,7 @@ app.whenReady().then(async () => {
   registerUpdates(() => mainWindow);
   await registerFreight(() => mainWindow);
   await registerPalletVision(() => mainWindow);
+  await registerConnectPwa(() => mainWindow);
   createWindow();
   app.on('activate', () => { if (!mainWindow) createWindow(); });
 });

@@ -1,6 +1,8 @@
-import { Camera, Tally5, Printer, Shuffle, Forklift, Video, type LucideIcon } from 'lucide-react';
-export type Tool = { id: string; name: string; description: string; icon: LucideIcon; route?: '/tools/freight-pictures' | '/tools/counter' | '/tools/pallet' | '/tools/raffle' | '/tools/picker-water' | '/tools/palletvision-collector'; available: boolean; category: string };
+import { Camera, Tally5, Printer, Shuffle, Forklift, Video, BookOpen, Smartphone, type LucideIcon } from 'lucide-react';
+export type Tool = { id: string; name: string; description: string; icon: LucideIcon; route?: '/tools/freight-pictures' | '/tools/counter' | '/tools/pallet' | '/tools/raffle' | '/tools/picker-water' | '/tools/palletvision-collector' | '/tools/library' | '/tools/connect-pwa'; available: boolean; category: string };
 export const tools: Tool[] = [
+  { id: 'library', name: 'Library', description: 'Searchable in-app guides for every tool, phone setup, and troubleshooting.', icon: BookOpen, route: '/tools/library', available: true, category: 'Help' },
+  { id: 'connect-pwa', name: 'Connect PWA', description: 'QR code to a phone hub linking Freight Pictures and PalletVision.', icon: Smartphone, route: '/tools/connect-pwa', available: true, category: 'Phone access' },
   { id: 'freight-pictures', name: 'Freight Pictures', description: 'Collect one picture per pallet from your phone over the local network.', icon: Camera, route: '/tools/freight-pictures', available: true, category: 'Shipping & warehouse' },
   { id: 'palletvision-collector', name: 'PalletVision Data Collector', description: 'Collect training data: record pallet videos and enter measured dimensions.', icon: Video, route: '/tools/palletvision-collector', available: true, category: 'Data collection' },
   { id: 'uline-raffle', name: 'Uline Raffle', description: 'Keep your list of names and pick a winner at random.', icon: Shuffle, route: '/tools/raffle', available: true, category: 'Everyday essentials' },

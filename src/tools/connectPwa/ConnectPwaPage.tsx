@@ -1,0 +1,108 @@
+import { useEffect, useState } from 'react';
+import { Link } from '@tanstack/react-router';
+import { ArrowLeft, Smartphone } from 'lucide-react';
+import type { ConnectPwaState } from '../../../shared/protocol';
+import { isPrivateIP } from '../../../shared/networkAllowlist';
+
+export function ConnectPwaPage() {
+  const [state, setState] = useState<ConnectPwaState>();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [address, setAddress] = useState('');
+  const [manualIp, setManualIp] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  async function action(action: Parameters<typeof window.toolkit.connectPwa>[0], data?: Parameters<typeof window.toolkit.connectPwa>[1]) {
+    setBusy(true); setError('');
+    try { const next = await window.toolkit.connectPwa(action, data); setState(next); if (action === 'setManualAddress') setManualIp(next.manualAddress || ''); }
+    catch (e) { setError(String(e)); } finally { setBusy(false); }
+  }
+
+  useEffect(() => {
+    void action('status');
+    const timer = setInterval(() => { void window.toolkit.connectPwa('status').then(setState).catch(e => setError(String(e))); }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const url = address && state?.addresses.includes(address) ? state.qrUrl.replace(/^https?:\/\/[^/]+/, address.replace(/\/$/, '')) : state?.qrUrl || '';
+  const [qr, setQr] = useState('');
+  useEffect(() => {
+    let active = true;
+    if (url) {
+      import('qrcode').then(q => q.toDataURL(url)).then(value => { if (active) setQr(value); }).catch(e => setError(String(e)));
+    }
+    return () => { active = false; };
+  }, [url]);
+
+  function applyManual() {
+    const ip = manualIp.trim();
+    if (ip && !isPrivateIP(ip)) { setError('Enter a private LAN or Tailscale IP address.'); return; }
+    void action('setManualAddress', { address: ip });
+  }
+
+  return <>
+    <Link to="/" className="back-link"><ArrowLeft size={16}/> All tools</Link>
+    <header className="page-heading">
+      <div>
+        <p className="eyebrow">PHONE ACCESS</p>
+        <h1>Connect PWA</h1>
+        <p className="subtitle">Scan once to open a phone hub with links to Freight Pictures and PalletVision.</p>
+      </div>
+      <Smartphone size={34}/>
+    </header>
+    {error && <p role="alert" className="freight-error">{error}</p>}
+    <div className="freight-layout">
+      <div>
+        <section className="freight-panel">
+          <h2>Phone hub server</h2>
+          <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable.'} Keep the toolkit open.</p>
+          {state?.httpsUrl && <p className="freight-muted">Tailscale HTTPS: <code>{state.httpsUrl}</code> (optional; port {state.httpsPort})</p>}
+          {state?.error && <p role="alert">{state.error}</p>}
+          <h3 style={{ marginTop: 18, fontSize: 14 }}>Reachability</h3>
+          <p className="freight-muted">Freight Pictures (48731): {state?.reachability.freight ? 'responding' : 'not responding'}</p>
+          <p className="freight-muted">PalletVision (48732): {state?.reachability.palletvision ? 'responding' : 'not responding'}</p>
+        </section>
+        <section className="freight-panel">
+          <h2>Connected devices</h2>
+          {!state?.devices.length ? <p className="freight-muted">No phones have opened the hub yet.</p> : (
+            <ul className="connect-device-list">
+              {state.devices.map(device => (
+                <li key={device.id}>
+                  <strong>{device.ip}</strong>
+                  <span>{new Date(device.lastSeen).toLocaleString()}</span>
+                  <span className="freight-muted">{device.userAgent}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+      <section className="freight-panel freight-qr">
+        <h2>Scan to install hub</h2>
+        <label>Network mode
+          <select value={state?.useTailscale ? 'tailscale' : 'local'} onChange={e => void action('setTailscale', { enabled: e.target.value === 'tailscale' })} disabled={busy}>
+            <option value="local">Local network</option>
+            <option value="tailscale">Tailscale</option>
+          </select>
+        </label>
+        {state?.useTailscale && state.tailscale.error && <p role="alert" className="freight-error">{state.tailscale.error}. Using local network instead.</p>}
+        {state?.useTailscale && state.tailscale.available && <p className="freight-muted">Using Tailscale: {state.tailscale.hostname || state.tailscale.address}</p>}
+        {qr && <img src={qr} alt="Scan to open Connect PWA on your phone"/>}
+        {!state?.useTailscale && <>
+          <label>Desktop network address
+            <select value={address || state?.addresses[0] || ''} onChange={e => setAddress(e.target.value)}>
+              {state?.addresses.map(a => <option key={a}>{a}</option>)}
+            </select>
+          </label>
+          <label>Manual IP fallback
+            <input aria-label="Manual private IP" value={manualIp} onChange={e => setManualIp(e.target.value)} placeholder="e.g. 192.168.1.50"/>
+          </label>
+          <button type="button" disabled={busy} onClick={() => applyManual()}>Apply manual address</button>
+        </>}
+        <input aria-label="Phone hub link" readOnly value={url}/>
+        <button disabled={!url} onClick={() => { void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(e => setError(String(e))); }}>{copied ? 'Link copied' : 'Copy link'}</button>
+        <p className="freight-muted">On iPhone, use Share → Add to Home Screen. On Android, use Install app when prompted. Service workers require HTTPS; plain LAN HTTP still works as a home-screen shortcut without offline caching.</p>
+      </section>
+    </div>
+  </>;
+}
