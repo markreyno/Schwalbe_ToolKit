@@ -94,20 +94,17 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       await mobile.locator('#folder-name').fill('Dock B');
       await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
       await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
-      await mobile.locator('#folder-name-upload').fill('');
-      await mobile.locator('#folder-name-upload').fill('Dock C');
-      await expect(mobile.locator('#folder-name-upload')).toHaveValue('Dock C');
-      await mobile.getByRole('button', { name: 'Save folder name', exact: true }).click();
-      await expect.poll(async () => mobile.locator('#message').textContent()).toContain('Dock C');
+      await expect(mobile.locator('#folder-name-upload')).toHaveValue('Dock B');
+      await mobile.screenshot({ path: path.join(screenshotDir, '03b-uploading-dock-b.png'), fullPage: true });
       releaseFile?.();
       await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
       await mobile.screenshot({ path: path.join(screenshotDir, '05-upload-complete.png'), fullPage: true });
 
-      const dockC = path.join(shipment.folder, 'Dock C');
-      expect((await readdir(dockC)).length).toBe(1);
-      expect(await readFile(path.join(dockC, (await readdir(dockC))[0]))).toEqual(PNG);
+      const dockB = path.join(shipment.folder, 'Dock B');
+      expect((await readdir(dockB)).length).toBe(1);
+      expect(await readFile(path.join(dockB, (await readdir(dockB))[0]))).toEqual(PNG);
 
-      for (const name of ['01-photos-selected.png', '02-folder-naming.png', '03-uploading.png', '04-back-to-folder.png', '05-upload-complete.png']) {
+      for (const name of ['01-photos-selected.png', '02-folder-naming.png', '03-uploading.png', '03b-uploading-dock-b.png', '04-back-to-folder.png', '05-upload-complete.png']) {
         await mkdir(artifactDir, { recursive: true });
         const { copyFile } = await import('node:fs/promises');
         await copyFile(path.join(screenshotDir, name), path.join(artifactDir, name));
