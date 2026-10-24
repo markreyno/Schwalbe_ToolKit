@@ -104,7 +104,7 @@ if (window.isSecureContext) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 } else {
   const note = document.getElementById('secure-note');
-  if (note) note.textContent = 'You are on plain HTTP. iOS Add to Home Screen works as a web clip, but service worker offline caching is disabled until you use HTTPS (optional Tailscale certificate on the desktop).';
+  if (note) note.textContent = 'This page is not in a secure context. Open the hub using the HTTPS link from the desktop and trust the desktop CA (local network) if prompted.';
 }
 
 void refreshStatus();

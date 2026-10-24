@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import http from 'node:http';
+import type http from 'node:http';
 import fs from 'node:fs/promises';
 import { createWriteStream, readFileSync, type WriteStream } from 'node:fs';
 import path from 'node:path';
@@ -9,6 +9,11 @@ import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import busboy from 'busboy';
 import { extractPalletVideoFrames } from './palletvisionFrames';
+import { detectTailscale, detectPreferredLanAddress } from './networkAllowlist';
+import type { PhoneTlsManager } from './tls/phoneTlsManager';
+import { startPhoneToolServer, type PhoneServerHandle } from './tls/phoneServer';
+import { buildPhoneAddressList, listPhoneUrlHosts } from './tls/phoneUrls';
+import { PALLETVISION_PHONE_PORT } from './toolPhoneUrls';
 
 function getFFmpegPath(): string {
   try {
@@ -38,21 +43,6 @@ function isPrivateIP(ip: string): boolean {
   if (parts[0] === 169 && parts[1] === 254) return true;
   if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
   return false;
-}
-
-async function detectTailscale(): Promise<{ address?: string; hostname?: string; error?: string }> {
-  try {
-    const { stdout } = await promisify(execFile)('tailscale', ['status', '--json'], { timeout: 3000 });
-    const status = JSON.parse(stdout);
-    if (!status.Self) return { error: 'Tailscale is not connected' };
-    const selfAddresses = status.Self.TailscaleIPs || [];
-    const ipv4 = selfAddresses.find((ip: string) => ip.includes('.'));
-    const hostname = status.Self.DNSName ? status.Self.DNSName.replace(/\.$/, '') : undefined;
-    return { address: ipv4, hostname };
-  } catch (e: any) {
-    if (e.code === 'ENOENT') return { error: 'Tailscale is not installed' };
-    return { error: 'Tailscale detection failed: ' + e.message };
-  }
 }
 
 const token = () => randomBytes(24).toString('hex');
@@ -87,7 +77,7 @@ type Pallet = {
 };
 
 export class PalletVisionServer {
-  private server?: http.Server;
+  private phoneHandle?: PhoneServerHandle;
   private root = '';
   private deviceTokens = new Map<string, { token: string; createdAt: number }>();
   private pallets: Pallet[] = [];
@@ -101,34 +91,53 @@ export class PalletVisionServer {
   private persistence: Promise<void> = Promise.resolve();
   private events: ({ type: 'upload_canceled'; captureId?: string; at: string } | { type: 'upload_lock_released'; reason: 'stale_timeout' | 'stale_no_progress' | 'forced'; at: string; detail?: string } | { type: 'process_error'; message: string; at: string })[] = [];
 
-  constructor(private settings: string) {}
+  constructor(private settings: string, private tlsManager: PhoneTlsManager) {}
 
   async start() {
-    if (process.platform === 'win32') {
-      try {
-        const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1; if ($route) { Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1 -ExpandProperty IPAddress }"], { windowsHide: true, timeout: 8000 });
-        const address = stdout.trim();
-        if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) this.preferredAddress = address;
-      } catch { /* Address selector remains available */ }
-    }
+    this.preferredAddress = await detectPreferredLanAddress();
     try { const data = JSON.parse(await fs.readFile(this.settings, 'utf8')); this.root = data.root || ''; this.deviceTokens = new Map(data.deviceTokens || []); this.pallets = data.pallets || []; this.useTailscale = data.useTailscale || false; } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read PalletVision settings.'; }
     if (!this.root) this.root = path.join(os.homedir(), 'PalletVision', 'data');
-    this.server = http.createServer((req, res) => {
-      req.on('error', (err) => this.logProcessError('request error', err));
-      res.on('error', (err) => this.logProcessError('response error', err));
-      req.socket?.on('error', (err) => this.logProcessError('socket error', err));
-      void this.handle(req, res).catch((e) => {
-        this.logProcessError('upload handler', e);
-        if (!res.headersSent && !res.writableEnded) {
-          res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-          res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
-        }
-      });
-    });
-    await new Promise<void>(resolve => { this.server!.once('error', e => { this.error = e.message; resolve(); }); this.server!.listen(48732, '0.0.0.0', () => { this.port = 48732; resolve(); }); });
+    await this.restartPhoneListener();
   }
 
-  stop() { this.server?.close(); this.server?.closeAllConnections(); }
+  async restartPhoneListener() {
+    if (this.phoneHandle) await this.phoneHandle.close();
+    this.phoneHandle = undefined;
+    this.port = 0;
+    await this.tlsManager.refreshServerTls(this.useTailscale);
+    const tls = this.tlsManager.getServerTls();
+    const allowInsecure = this.tlsManager.getAllowInsecureHttp();
+    if (!tls && !allowInsecure) {
+      const status = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
+      this.error = status.tlsError || 'HTTPS is required for phone links.';
+      return;
+    }
+    try {
+      this.phoneHandle = await startPhoneToolServer({
+        port: PALLETVISION_PHONE_PORT,
+        tls,
+        allowInsecureHttp: allowInsecure,
+        handler: (req, res) => {
+          req.on('error', (err) => this.logProcessError('request error', err));
+          res.on('error', (err) => this.logProcessError('response error', err));
+          req.socket?.on('error', (err) => this.logProcessError('socket error', err));
+          void this.handle(req, res).catch((e) => {
+            this.logProcessError('upload handler', e);
+            if (!res.headersSent && !res.writableEnded) {
+              res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+              res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+            }
+          });
+        }
+      });
+      this.port = this.phoneHandle.port;
+      this.error = '';
+    } catch (e: any) {
+      this.error = e.message || String(e);
+    }
+  }
+
+  stop() { void this.phoneHandle?.close(); }
 
   private persist() {
     const snapshot = JSON.stringify({ root: this.root, deviceTokens: Array.from(this.deviceTokens.entries()), pallets: this.pallets, useTailscale: this.useTailscale });
@@ -256,7 +265,7 @@ export class PalletVisionServer {
 
   async setRoot(root: string) { if (this.uploadLock) throw new Error('Wait for active upload to complete.'); await fs.access(root); this.root = root; await this.persist(); }
   
-  async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); }
+  async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); await this.restartPhoneListener(); }
 
   folder(id: string) { const p = this.pallets.find(p => p.id === id); if (!p) throw new Error('Pallet not found.'); return p.folder; }
 
@@ -395,19 +404,19 @@ export class PalletVisionServer {
 
   async status() {
     const tailscale = await detectTailscale();
-    let urls: string[];
-    if (this.useTailscale && tailscale.hostname) {
-      urls = [`http://${tailscale.hostname}:${this.port}`];
-    } else if (this.useTailscale && tailscale.address) {
-      urls = [`http://${tailscale.address}:${this.port}`];
-    } else {
-      const addresses = Object.values(os.networkInterfaces()).flat().filter(a => a && a.family === 'IPv4' && !a.internal).map(a => a!.address).sort((a, b) => Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(b)) - Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a)));
-      addresses.sort((a, b) => Number(b === this.preferredAddress) - Number(a === this.preferredAddress));
-      urls = addresses.map(a => `http://${a}:${this.port}`);
+    const insecure = this.tlsManager.getAllowInsecureHttp() && !this.tlsManager.getServerTls();
+    let urls: string[] = [];
+    try {
+      const { hosts } = await listPhoneUrlHosts({ useTailscale: this.useTailscale, preferredLanAddress: this.preferredAddress });
+      urls = buildPhoneAddressList(hosts, this.port || PALLETVISION_PHONE_PORT, insecure);
+    } catch (e: any) {
+      this.error = e.message || String(e);
+      urls = [this.tlsManager.buildToolBaseUrl('127.0.0.1', this.port || PALLETVISION_PHONE_PORT)];
     }
-    const base = urls[0] || `http://127.0.0.1:${this.port}`;
+    const base = urls[0] || this.tlsManager.buildToolBaseUrl('127.0.0.1', this.port || PALLETVISION_PHONE_PORT);
     const lock = this.uploadLockStatus();
-    return { root: this.root, running: !!this.port, port: this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), uploadBusy: lock.uploadBusy, uploadLock: lock.uploadLock, events: this.events.map(e => ({ ...e })), pallets: this.pallets.map(p => ({ ...p })) };
+    const phoneTls = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
+    return { root: this.root, running: !!this.port, port: this.port, error: this.error || phoneTls.tlsError, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, phoneTls, qrUrl: `${base}/`, qr: await QRCode.toDataURL(`${base}/`), uploadBusy: lock.uploadBusy, uploadLock: lock.uploadLock, events: this.events.map(e => ({ ...e })), pallets: this.pallets.map(p => ({ ...p })) };
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {

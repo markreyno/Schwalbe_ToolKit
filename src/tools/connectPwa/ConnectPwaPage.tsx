@@ -56,8 +56,14 @@ export function ConnectPwaPage() {
         <section className="freight-panel">
           <h2>Phone hub server</h2>
           <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable.'} Keep the toolkit open.</p>
-          {state?.httpsUrl && <p className="freight-muted">Tailscale HTTPS: <code>{state.httpsUrl}</code> (optional; port {state.httpsPort})</p>}
+          {state?.phoneTls && !state.phoneTls.tlsReady && <p role="alert" className="freight-error">{state.phoneTls.tlsError}</p>}
           {state?.error && <p role="alert">{state.error}</p>}
+          {state?.phoneTls?.caFingerprint && !state.phoneTls.usingTailscaleCert && <>
+            <p className="freight-muted">CA fingerprint (verify on phone): <code>{state.phoneTls.caFingerprint}</code></p>
+            <p className="freight-muted">Trust URL (HTTP, CA only): <code>{state.phoneTls.caTrustHttpUrl}</code></p>
+            {state.phoneTls.caTrustQr && <img src={state.phoneTls.caTrustQr} alt="Scan to trust desktop CA on your phone" style={{ maxWidth: 220 }}/>}
+          </>}
+          <label><input type="checkbox" checked={!!state?.phoneTls?.allowInsecureHttp} disabled={busy} onChange={e => void action('setAllowInsecureHttp', { enabled: e.target.checked })}/> Allow insecure HTTP (not recommended)</label>
           <h3 style={{ marginTop: 18, fontSize: 14 }}>Reachability</h3>
           <p className="freight-muted">Freight Pictures (48731): {state?.reachability.freight ? 'responding' : 'not responding'}</p>
           <p className="freight-muted">PalletVision (48732): {state?.reachability.palletvision ? 'responding' : 'not responding'}</p>
@@ -101,7 +107,7 @@ export function ConnectPwaPage() {
         </>}
         <input aria-label="Phone hub link" readOnly value={url}/>
         <button disabled={!url} onClick={() => { void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(e => setError(String(e))); }}>{copied ? 'Link copied' : 'Copy link'}</button>
-        <p className="freight-muted">On iPhone, use Share → Add to Home Screen. On Android, use Install app when prompted. Service workers require HTTPS; plain LAN HTTP still works as a home-screen shortcut without offline caching.</p>
+        <p className="freight-muted">Hub links use HTTPS on port {state?.port}. On local Wi‑Fi, trust the desktop CA once (see Phone hub server). On iPhone: Share → Add to Home Screen. On Android: Install app when offered.</p>
       </section>
     </div>
   </>;

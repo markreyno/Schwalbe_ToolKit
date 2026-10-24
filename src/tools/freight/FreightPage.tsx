@@ -19,7 +19,7 @@ export function FreightPage() {
   useEffect(() => { void action('status'); const timer = setInterval(() => { void window.toolkit.freight('status').then(setState).catch(e => setError(String(e))); }, 3000); return () => clearInterval(timer); }, []);
   const shipment = state?.shipments.find(s => s.id === selected);
   const originalUrl = shipment?.url || state?.masterUrl || '';
-  const url = address && state?.addresses.includes(address) ? originalUrl.replace(/^http:\/\/[^/]+/, address) : originalUrl;
+  const url = address && state?.addresses.includes(address) ? originalUrl.replace(/^https?:\/\/[^/]+/, address.replace(/\/$/, '')) : originalUrl;
   const [qr, setQr] = useState('');
   useEffect(() => { let active = true; if (url) { import('qrcode').then(q => q.toDataURL(url)).then(value => { if (active) setQr(value); }).catch(e => setError(String(e))); } return () => { active = false; }; }, [url]);
   return <><Link to="/" className="back-link"><ArrowLeft size={16}/> All tools</Link><header className="page-heading"><div><p className="eyebrow">SHIPPING & WAREHOUSE</p><h1>Freight Pictures</h1><p className="subtitle">One picture per pallet, saved at original quality.</p></div><Camera size={34}/></header>

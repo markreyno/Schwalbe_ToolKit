@@ -4,7 +4,7 @@ Collect **training data**: pallet videos plus **measured** height, width, and le
 
 ## Ports and security
 
-- Desktop HTTP server: TCP **48732**
+- Desktop HTTPS server: TCP **48732** (see [Phone HTTPS](phone-https.md))
 - Private-network clients only (RFC1918, link-local, Tailscale)
 - Device pairing token required for uploads
 

@@ -1,14 +1,16 @@
 import { MAX_FREIGHT_PICTURES, validateFreightImage } from './freightValidation';
 import { resolveFreightUploadDirectory } from './freightFolderName';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import http from 'node:http';
+import type http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import { mobilePage } from './freightMobile';
+import { detectTailscale, detectPreferredLanAddress } from './networkAllowlist';
+import type { PhoneTlsManager } from './tls/phoneTlsManager';
+import { startPhoneToolServer, type PhoneServerHandle } from './tls/phoneServer';
+import { buildPhoneAddressList, listPhoneUrlHosts } from './tls/phoneUrls';
+import { FREIGHT_PHONE_PORT } from './toolPhoneUrls';
 
 /** In-memory upload batch lock duration; overridable in tests via FREIGHT_BATCH_TTL_MS. */
 export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0 ? Number(process.env.FREIGHT_BATCH_TTL_MS) : 60000;
@@ -27,26 +29,11 @@ function isPrivateIP(ip: string): boolean {
   return false;
 }
 
-async function detectTailscale(): Promise<{ address?: string; hostname?: string; error?: string }> {
-  try {
-    const { stdout } = await promisify(execFile)('tailscale', ['status', '--json'], { timeout: 3000 });
-    const status = JSON.parse(stdout);
-    if (!status.Self) return { error: 'Tailscale is not connected' };
-    const selfAddresses = status.Self.TailscaleIPs || [];
-    const ipv4 = selfAddresses.find((ip: string) => ip.includes('.'));
-    const hostname = status.Self.DNSName ? status.Self.DNSName.replace(/\.$/, '') : undefined;
-    return { address: ipv4, hostname };
-  } catch (e: any) {
-    if (e.code === 'ENOENT') return { error: 'Tailscale is not installed' };
-    return { error: 'Tailscale detection failed: ' + e.message };
-  }
-}
-
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string };
 type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; expires: number; uploadDir: string; uploadFolderLabel: string };
 export class FreightServer {
-  private server?: http.Server;
+  private phoneHandle?: PhoneServerHandle;
   private root = '';
   private master = token();
   private shipments: Shipment[] = [];
@@ -57,20 +44,42 @@ export class FreightServer {
   private error = '';
   private writing = false;
   private persistence: Promise<void> = Promise.resolve();
-  constructor(private settings: string) {}
+  constructor(private settings: string, private tlsManager: PhoneTlsManager) {}
   async start() {
-    if (process.platform === 'win32') {
-      try {
-        const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1; if ($route) { Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1 -ExpandProperty IPAddress }"], { windowsHide: true, timeout: 8000 });
-        const address = stdout.trim();
-        if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) this.preferredAddress = address;
-      } catch { /* The address selector remains available if Windows route detection fails. */ }
-    }
+    this.preferredAddress = await detectPreferredLanAddress();
     try { const data = JSON.parse(await fs.readFile(this.settings, 'utf8')); this.root = data.root; this.master = data.master; this.shipments = data.shipments; this.useTailscale = data.useTailscale || false; } catch (e: any) { if (e.code !== 'ENOENT') this.error = 'Could not read Freight Pictures settings.'; }
-    this.server = http.createServer((req, res) => { void this.handle(req, res).catch(e => { if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); } else res.end(); }); });
-    await new Promise<void>(resolve => { this.server!.once('error', e => { this.error = e.message; resolve(); }); this.server!.listen(48731, '0.0.0.0', () => { this.port = 48731; resolve(); }); });
+    await this.restartPhoneListener();
   }
-  stop() { this.server?.close(); this.server?.closeAllConnections(); }
+  async restartPhoneListener() {
+    if (this.phoneHandle) await this.phoneHandle.close();
+    this.phoneHandle = undefined;
+    this.port = 0;
+    await this.tlsManager.refreshServerTls(this.useTailscale);
+    const tls = this.tlsManager.getServerTls();
+    const allowInsecure = this.tlsManager.getAllowInsecureHttp();
+    if (!tls && !allowInsecure) {
+      const status = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
+      this.error = status.tlsError || 'HTTPS is required for phone links.';
+      return;
+    }
+    try {
+      this.phoneHandle = await startPhoneToolServer({
+        port: FREIGHT_PHONE_PORT,
+        tls,
+        allowInsecureHttp: allowInsecure,
+        handler: (req, res) => {
+          void this.handle(req, res).catch(e => {
+            if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); }
+          });
+        }
+      });
+      this.port = this.phoneHandle.port;
+      this.error = '';
+    } catch (e: any) {
+      this.error = e.message || String(e);
+    }
+  }
+  stop() { void this.phoneHandle?.close(); }
   private persist() {
     const snapshot = JSON.stringify({ root: this.root, master: this.master, shipments: this.shipments, useTailscale: this.useTailscale });
     const next = this.persistence.catch(() => {}).then(async () => { await fs.mkdir(path.dirname(this.settings), { recursive: true }); const temp = this.settings + '.tmp'; await fs.writeFile(temp, snapshot); await fs.rename(temp, this.settings); });
@@ -102,22 +111,22 @@ export class FreightServer {
     this.shipments.unshift(shipment); await this.persist(); return shipment;
   }
   async reopen(id: string) { const s = this.shipments.find(s => s.id === id); if (!s || !s.closed) throw new Error('Select a completed shipment.'); s.closed = false; s.reupload = true; s.token = token(); await this.persist(); }
-  async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); }
+  async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); await this.restartPhoneListener(); }
   folder(id: string) { const s = this.shipments.find(s => s.id === id); if (!s) throw new Error('Shipment not found.'); return s.folder; }
   async status() {
     const tailscale = await detectTailscale();
-    let urls: string[];
-    if (this.useTailscale && tailscale.hostname) {
-      urls = [`http://${tailscale.hostname}:${this.port}`];
-    } else if (this.useTailscale && tailscale.address) {
-      urls = [`http://${tailscale.address}:${this.port}`];
-    } else {
-      const addresses = Object.values(os.networkInterfaces()).flat().filter(a => a && a.family === 'IPv4' && !a.internal).map(a => a!.address).sort((a, b) => Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(b)) - Number(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a)));
-      addresses.sort((a, b) => Number(b === this.preferredAddress) - Number(a === this.preferredAddress));
-      urls = addresses.map(a => `http://${a}:${this.port}`);
+    const insecure = this.tlsManager.getAllowInsecureHttp() && !this.tlsManager.getServerTls();
+    let urls: string[] = [];
+    try {
+      const { hosts } = await listPhoneUrlHosts({ useTailscale: this.useTailscale, preferredLanAddress: this.preferredAddress });
+      urls = buildPhoneAddressList(hosts, this.port || FREIGHT_PHONE_PORT, insecure);
+    } catch (e: any) {
+      this.error = e.message || String(e);
+      urls = [this.tlsManager.buildToolBaseUrl('127.0.0.1', this.port || FREIGHT_PHONE_PORT)];
     }
-    const base = urls[0] || `http://127.0.0.1:${this.port}`;
-    return { root: this.root, running: !!this.port, error: this.error, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, masterUrl: `${base}/?key=${this.master}`, masterQr: await QRCode.toDataURL(`${base}/?key=${this.master}`), shipments: await Promise.all(this.shipments.map(async s => ({ ...s, url: `${base}/?key=${s.token}`, qr: s.closed ? '' : await QRCode.toDataURL(`${base}/?key=${s.token}`) }))) };
+    const base = urls[0] || this.tlsManager.buildToolBaseUrl('127.0.0.1', this.port || FREIGHT_PHONE_PORT);
+    const phoneTls = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
+    return { root: this.root, running: !!this.port, error: this.error || phoneTls.tlsError, addresses: urls, useTailscale: this.useTailscale, tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error }, phoneTls, masterUrl: `${base}/?key=${this.master}`, masterQr: await QRCode.toDataURL(`${base}/?key=${this.master}`), shipments: await Promise.all(this.shipments.map(async s => ({ ...s, url: `${base}/?key=${s.token}`, qr: s.closed ? '' : await QRCode.toDataURL(`${base}/?key=${s.token}`) }))) };
   }
   private async body(req: http.IncomingMessage, max: number) { const chunks: Buffer[] = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > max) throw new Error('Upload exceeds the allowed size.'); chunks.push(chunk); } return Buffer.concat(chunks); }
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {

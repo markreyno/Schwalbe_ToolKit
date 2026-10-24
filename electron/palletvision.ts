@@ -2,11 +2,13 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { PalletVisionServer } from './palletvisionServer';
 import { registerMainProcessErrorHandlers } from './mainProcessLog';
+import type { PhoneTlsManager } from './tls/phoneTlsManager';
 
-export async function registerPalletVision(window: () => BrowserWindow | null) {
-  const service = new PalletVisionServer(path.join(app.getPath('userData'), 'palletvision.json'));
+export async function registerPalletVision(window: () => BrowserWindow | null, tlsManager: PhoneTlsManager) {
+  const service = new PalletVisionServer(path.join(app.getPath('userData'), 'palletvision.json'), tlsManager);
   registerMainProcessErrorHandlers((summary) => service.noteProcessError(summary));
   await service.start();
+  tlsManager.onReload(() => service.restartPhoneListener());
 
   ipcMain.handle('toolkit:palletvision', async (event, action: string, data: any) => {
     const win = window();
@@ -39,6 +41,7 @@ export async function registerPalletVision(window: () => BrowserWindow | null) {
       if (error) throw new Error(error);
     }
     else if (action === 'setTailscale') await service.setTailscaleMode(data?.enabled);
+    else if (action === 'setAllowInsecureHttp') await tlsManager.setAllowInsecureHttp(!!data?.enabled);
     else if (action === 'update') await service.updateMetadata(data?.id, data?.updates);
     else if (action !== 'status') throw new Error('Unsupported action.');
     

@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { ConnectPwaServer, CONNECT_PWA_PORT } from '../electron/connectPwaServer';
+import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -12,20 +13,21 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
   await mkdir(outDir, { recursive: true });
 
   const connectRoot = path.resolve('.cache/connect-pwa-screenshot', randomUUID());
-  const connectServer = new ConnectPwaServer(path.join(connectRoot, 'settings.json'), async host => [
+  const connectTls = await createTestPhoneTlsManager(connectRoot);
+  const connectServer = new ConnectPwaServer(path.join(connectRoot, 'settings.json'), connectTls, async host => [
     {
       id: 'freight-pictures',
       title: 'Freight Pictures',
       category: 'SHIPPING & WAREHOUSE',
       ready: true,
-      url: `http://${host}:48731/?key=demo`
+      url: `https://${host}:48731/?key=demo`
     },
     {
       id: 'palletvision-collector',
       title: 'PalletVision Data Collector',
       category: 'DATA COLLECTION',
       ready: true,
-      url: `http://${host}:48732/`
+      url: `https://${host}:48732/`
     }
   ]);
   await connectServer.start();
@@ -35,7 +37,7 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
     isMobile: true,
     hasTouch: true
   });
-  await hubPage.goto(`http://127.0.0.1:${CONNECT_PWA_PORT}/`);
+  await hubPage.goto(`https://127.0.0.1:${CONNECT_PWA_PORT}/`);
   await hubPage.getByRole('heading', { name: 'Warehouse tools', level: 1 }).waitFor();
   await hubPage.screenshot({ path: path.join(outDir, 'connect-pwa-hub.png'), fullPage: true });
   await hubPage.close();
@@ -64,7 +66,7 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
     await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
     const pvState = await page.evaluate(() => window.toolkit.palletvision('status'));
     const pvMobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true });
-    await pvMobile.goto(pvState.qrUrl.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48732'));
+    await pvMobile.goto(pvState.qrUrl.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48732'));
     await expect(pvMobile.getByRole('heading', { name: 'New Pallet' })).toBeVisible();
     await pvMobile.screenshot({ path: path.join(outDir, 'palletvision-mobile-home.png'), fullPage: true });
     await pvMobile.close();
@@ -78,7 +80,7 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
     const freightState = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = freightState.shipments.find(s => s.company === 'Screenshot Co')!;
     const freightMobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true });
-    await freightMobile.goto(shipment.url.replace(/^http:\/\/[^/]+/, 'http://127.0.0.1:48731'));
+    await freightMobile.goto(shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731'));
     const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=', 'base64');
     await freightMobile.locator('#files').setInputFiles({ name: 'pallet.png', mimeType: 'image/png', buffer: bytes });
     await freightMobile.getByLabel('Pallet amount', { exact: true }).fill('1');
