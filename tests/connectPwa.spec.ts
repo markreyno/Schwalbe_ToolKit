@@ -33,12 +33,21 @@ test.describe('Connect PWA server', () => {
     expect(hub.headers.get('content-type')).toContain('text/html');
     const html = await hub.text();
     expect(html).toContain('Schwalbe ToolKit');
+    expect(html).toContain('/hub.css');
+
+    const css = await fetch(`${baseUrl}/hub.css`);
+    expect(css.ok).toBe(true);
+    expect(await css.text()).toContain('--brand-blue');
 
     const manifest = await fetch(`${baseUrl}/manifest.webmanifest`);
     expect(manifest.ok).toBe(true);
     const manifestJson = await manifest.json();
     expect(manifestJson.name).toBe('Schwalbe ToolKit');
     expect(manifestJson.display).toBe('standalone');
+    expect(manifestJson.theme_color).toBe('#f5f8fa');
+
+    const touch = await fetch(`${baseUrl}/apple-touch-icon.png`);
+    expect(touch.ok).toBe(true);
 
     const sw = await fetch(`${baseUrl}/sw.js`);
     expect(sw.ok).toBe(true);

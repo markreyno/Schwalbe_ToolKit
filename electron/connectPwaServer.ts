@@ -185,6 +185,7 @@ export class ConnectPwaServer {
     if (name.endsWith('.js')) return 'application/javascript; charset=utf-8';
     if (name.endsWith('.webmanifest')) return 'application/manifest+json; charset=utf-8';
     if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.css')) return 'text/css; charset=utf-8';
     return 'application/octet-stream';
   }
 
@@ -205,11 +206,14 @@ export class ConnectPwaServer {
     }
     const staticMap: Record<string, string> = {
       '/': 'connectPwaMobile.html',
+      '/hub.css': 'hub.css',
       '/connectPwaMobile.js': 'connectPwaMobile.js',
       '/manifest.webmanifest': 'manifest.webmanifest',
       '/sw.js': 'sw.js',
+      '/brand-logo.png': 'brand-logo.png',
       '/icon-192.png': 'icon-192.png',
-      '/icon-512.png': 'icon-512.png'
+      '/icon-512.png': 'icon-512.png',
+      '/apple-touch-icon.png': 'apple-touch-icon.png'
     };
     const file = staticMap[url.pathname];
     if (req.method === 'GET' && file) {

@@ -1,5 +1,5 @@
 const CACHE = 'schwalbe-toolkit-connect-v1';
-const SHELL = ['/', '/connectPwaMobile.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const SHELL = ['/', '/hub.css', '/connectPwaMobile.js', '/manifest.webmanifest', '/brand-logo.png', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
