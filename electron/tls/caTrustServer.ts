@@ -61,7 +61,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, getCaPem: () =>
   }
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trust Schwalbe ToolKit</title></head><body style="font-family:system-ui,sans-serif;padding:24px 24px 24px 56px;max-width:640px;margin:auto">
+    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trust Schwalbe ToolKit</title><style>.brand-bar{background:#fff;border-bottom:1px solid #e7eaf0;padding:18px 20px;margin:0 -24px 20px}.brand{font:600 14px system-ui,sans-serif;color:#080a0b}body{font-family:system-ui,sans-serif;padding:0 24px 24px;max-width:640px;margin:auto}</style></head><body>
+<header class="brand-bar"><div class="brand">Schwalbe ToolKit · Trust</div></header>
 <h1>Trust this desktop (one time)</h1>
 <p>This page only distributes the desktop certificate authority. Phone tools use HTTPS on their usual ports after you trust this CA.</p>
 <p><a href="/ca.crt">Download CA certificate (.crt)</a> — Android: Settings → Security → Install certificate.</p>

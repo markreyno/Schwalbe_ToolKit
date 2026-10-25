@@ -61,6 +61,9 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
       await mobile.goto(url);
       await mobile.waitForSelector('.phone-home-link');
+      await mobile.locator('header.brand-bar').screenshot({
+        path: path.join(screenshotDir, '00-header-home-arrow.png'),
+      });
 
       await mobile.locator('#files').setInputFiles([{ name: 'a.png', mimeType: 'image/png', buffer: PNG }]);
       await mobile.getByLabel('Pallet amount', { exact: true }).fill('1');
@@ -104,7 +107,7 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       expect((await readdir(dockB)).length).toBe(1);
       expect(await readFile(path.join(dockB, (await readdir(dockB))[0]))).toEqual(PNG);
 
-      for (const name of ['01-photos-selected.png', '02-folder-naming.png', '03-uploading.png', '03b-uploading-dock-b.png', '04-back-to-folder.png', '05-upload-complete.png']) {
+      for (const name of ['00-header-home-arrow.png', '01-photos-selected.png', '02-folder-naming.png', '03-uploading.png', '03b-uploading-dock-b.png', '04-back-to-folder.png', '05-upload-complete.png']) {
         await mkdir(artifactDir, { recursive: true });
         const { copyFile } = await import('node:fs/promises');
         await copyFile(path.join(screenshotDir, name), path.join(artifactDir, name));

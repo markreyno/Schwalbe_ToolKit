@@ -17,10 +17,13 @@
   }
   const style = document.createElement('style');
   style.textContent =
-    '.phone-home-link{position:fixed;top:max(10px,env(safe-area-inset-top));left:max(10px,env(safe-area-inset-left));z-index:2000;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,.92);border:1px solid #dfe6ef;color:#080a0b;text-decoration:none;box-shadow:0 1px 3px rgba(8,10,11,.08)}' +
-    '.phone-home-link:hover{background:#fff}' +
+    '.brand-bar.phone-hub-nav-host{display:flex;align-items:center;gap:12px}' +
+    '.phone-hub-nav-fallback{display:flex;align-items:center;padding:12px 16px 0;max-width:668px;margin:0 auto}' +
+    '.phone-home-link{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:36px;height:36px;border-radius:10px;background:#fff;border:1px solid #dfe6ef;color:#080a0b;text-decoration:none;box-shadow:0 1px 2px rgba(8,10,11,.06)}' +
+    '.phone-home-link:hover{background:#f5f8fa}' +
     '.phone-home-link:focus-visible{outline:3px solid #39738f;outline-offset:2px}' +
-    '.phone-home-link svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}';
+    '.phone-home-link svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}' +
+    '.brand-bar.phone-hub-nav-host .brand{flex:1;min-width:0}';
   document.head.appendChild(style);
   const link = document.createElement('a');
   link.className = 'phone-home-link';
@@ -32,7 +35,16 @@
     e.preventDefault();
     goHome();
   });
-  document.body.appendChild(link);
+  const bar = document.querySelector('.brand-bar');
+  if (bar) {
+    bar.classList.add('phone-hub-nav-host');
+    bar.insertBefore(link, bar.firstChild);
+  } else {
+    const row = document.createElement('div');
+    row.className = 'phone-hub-nav-fallback';
+    row.appendChild(link);
+    document.body.insertBefore(row, document.body.firstChild);
+  }
   window.phoneHubNavSetBeforeLeave = fn => {
     window.phoneHubNavOnBeforeLeave = fn;
   };
