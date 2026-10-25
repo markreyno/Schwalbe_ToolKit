@@ -6,4 +6,5 @@ await mkdir('dist-electron', { recursive: true });
 await copyFile('electron/palletvisionMobile.html', 'dist-electron/palletvisionMobile.html');
 await copyFile('electron/palletvisionMobile.js', 'dist-electron/palletvisionMobile.js');
 await copyFile('electron/phoneHubNav.js', 'dist-electron/phoneHubNav.js');
+await copyFile('electron/freightMobileInline.js', 'dist-electron/freightMobileInline.js');
 await cp('electron/connectPwa', 'dist-electron/connectPwa', { recursive: true });

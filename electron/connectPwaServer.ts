@@ -163,8 +163,8 @@ export class ConnectPwaServer {
       addresses: addressUrls,
       useTailscale: this.useTailscale,
       tailscale: { available: !tailscale.error, address: tailscale.address, hostname: tailscale.hostname, error: tailscale.error },
-      qrUrl: `${base}/`,
-      qr: await QRCode.toDataURL(`${base}/`),
+      qrUrl: `${base}/install`,
+      qr: await QRCode.toDataURL(`${base}/install`),
       phoneTls,
       devices,
       reachability: { freight: reach.freightReachable, palletvision: reach.palletvisionReachable },
@@ -188,6 +188,22 @@ export class ConnectPwaServer {
     const template = await fs.readFile(path.join(this.assetDir, 'sw.js'), 'utf8');
     const version = await this.getAppVersion();
     return Buffer.from(template.replaceAll(PWA_CACHE_VERSION_PLACEHOLDER, version), 'utf8');
+  }
+
+  private manifestOrigin(req: http.IncomingMessage) {
+    const host = req.headers.host || `127.0.0.1:${this.port || CONNECT_PWA_PORT}`;
+    return `https://${host}`;
+  }
+
+  private async readManifest(req: http.IncomingMessage) {
+    const origin = this.manifestOrigin(req);
+    const base = JSON.parse(await fs.readFile(path.join(this.assetDir, 'manifest.webmanifest'), 'utf8'));
+    const manifest = {
+      ...base,
+      related_applications: [{ platform: 'webapp', url: `${origin}/manifest.webmanifest` }],
+      prefer_related_applications: false
+    };
+    return Buffer.from(JSON.stringify(manifest), 'utf8');
   }
 
   private contentType(name: string) {
@@ -234,9 +250,11 @@ export class ConnectPwaServer {
     }
     const staticMap: Record<string, string> = {
       '/': 'connectPwaMobile.html',
+      '/install': 'install.html',
       '/hub.css': 'hub.css',
       '/connectPwaMobile.js': 'connectPwaMobile.js',
       '/pwaInstallUi.js': 'pwaInstallUi.js',
+      '/install.js': 'install.js',
       '/manifest.webmanifest': 'manifest.webmanifest',
       '/sw.js': 'sw.js',
       '/brand-logo.png': 'brand-logo.png',
@@ -246,9 +264,20 @@ export class ConnectPwaServer {
     };
     const file = staticMap[url.pathname];
     if (req.method === 'GET' && file) {
-      const body = file === 'sw.js' ? await this.readServiceWorker() : await this.readAsset(file);
+      const body =
+        file === 'sw.js'
+          ? await this.readServiceWorker()
+          : file === 'manifest.webmanifest'
+            ? await this.readManifest(req)
+            : await this.readAsset(file);
       const cache =
-        file === 'connectPwaMobile.html' || file === 'connectPwaMobile.js' || file === 'pwaInstallUi.js' || file === 'sw.js'
+        file === 'connectPwaMobile.html' ||
+        file === 'install.html' ||
+        file === 'connectPwaMobile.js' ||
+        file === 'pwaInstallUi.js' ||
+        file === 'install.js' ||
+        file === 'manifest.webmanifest' ||
+        file === 'sw.js'
           ? 'no-store'
           : 'public, max-age=3600';
       res.writeHead(200, { 'Content-Type': this.contentType(file), 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff' });

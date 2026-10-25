@@ -5,6 +5,7 @@ const ASSET_PATHS = [
   '/hub.css',
   '/connectPwaMobile.js',
   '/pwaInstallUi.js',
+  '/install.js',
   '/manifest.webmanifest',
   '/brand-logo.png',
   '/icon-192.png',
@@ -15,7 +16,7 @@ const ASSET_PATHS = [
 function isHtmlRequest(request) {
   if (request.mode === 'navigate') return true;
   const path = new URL(request.url).pathname;
-  return path === '/' || path.endsWith('.html');
+  return path === '/' || path === '/install' || path.endsWith('.html');
 }
 
 async function networkFirstHtml(request) {

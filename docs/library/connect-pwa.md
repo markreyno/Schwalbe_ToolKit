@@ -15,16 +15,28 @@
 1. Open **Connect PWA** from the tool hub.
 2. Choose **Local network** or **Tailscale** (same idea as other phone tools).
 3. If needed, pick the correct **Desktop network address** or enter a **Manual IP fallback** (private RFC1918, link-local, or Tailscale only).
-4. Scan the QR code or copy the link to the phone.
+4. Scan the QR code or copy the link to the phone (opens **`/install`**).
 5. Keep the toolkit open on the desktop.
 
 ## Step-by-step (phone)
 
-1. Open the link or scan the QR code.
-2. Confirm the status line shows desktop tools are reachable when possible.
-3. Tap a tool tile to open **Freight Pictures** or **PalletVision Data Collector** (links are not copied from the hub; use the tile).
-4. Use the **Home** arrow (top-left) on any phone tool page to return to this hub.
-5. Optional: add the hub to your home screen with the browser’s own menu (**Share → Add to Home Screen** on iPhone, or **Install** / menu on Android). The installed app does not show install steps; if an older copy still shows them, close and reopen the hub once after updating the desktop toolkit so the service worker can refresh.
+1. Scan the desktop **Connect PWA** QR code or open the link. It goes to **`/install`** (not the hub directly).
+2. Follow the install page:
+   - **Android (Chrome):** use **Install app** when offered, or the browser install prompt.
+   - **iPhone (Safari):** **Share → Add to Home Screen**, then open **Schwalbe ToolKit** from the home screen icon.
+3. Open the installed app (or continue in the browser via the link on the install page).
+4. On the **warehouse hub** (`/`), confirm the status line when possible and tap a tool tile for **Freight Pictures** or **PalletVision**.
+5. Use the **Home** arrow (top-left) on tool pages to return to the hub.
+
+The hub (`/`) never shows install prompts. Install instructions live only on **`/install`**.
+
+### iOS limitation
+
+Safari opens scanned HTTPS links in the **browser**, not inside an installed web app. After install, workers should open **Schwalbe ToolKit from the home screen**; the install page shows this when it detects a prior install. Scanning the QR again in Safari will not switch to the installed app.
+
+### Android link capturing
+
+The web app manifest sets `handle_links: preferred` and `launch_handler.client_mode: navigate-existing` so HTTPS links in scope (including `/install`) can open the installed PWA when Chrome supports link capturing.
 
 ## Network modes
 

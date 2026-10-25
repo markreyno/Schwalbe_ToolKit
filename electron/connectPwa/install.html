@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-store">
+<meta name="theme-color" content="#f5f8fa">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Schwalbe ToolKit">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/hub.css">
+<title>Install Schwalbe ToolKit</title>
+</head>
+<body>
+<header class="brand-bar">
+  <div class="brand" aria-label="Schwalbe ToolKit">
+    <img class="brand-logo" src="/brand-logo.png" width="48" height="48" alt="">
+    <div class="brand-text">SCHWALBE<small>TOOLKIT · CONNECT</small></div>
+  </div>
+</header>
+<div class="shell install-shell">
+  <header class="page-heading">
+    <p class="eyebrow">PHONE ACCESS</p>
+    <h1>Install the toolkit hub</h1>
+    <p class="subtitle">Add Schwalbe ToolKit to your home screen for quick access to Freight Pictures and PalletVision on this phone.</p>
+  </header>
+
+  <section class="panel" id="installed-panel" hidden>
+    <h2 id="installed-heading">App ready</h2>
+    <p class="note" id="installed-message"></p>
+    <button type="button" class="btn-primary" id="open-hub" hidden>Open app</button>
+    <a class="btn-primary" id="open-hub-link" href="/" hidden>Open warehouse tools</a>
+  </section>
+
+  <section class="panel" id="install-panel">
+    <h2 id="install-heading">Add to home screen</h2>
+    <div id="android-install" hidden>
+      <p class="note">When your browser offers it, tap Install. You can also use the button below.</p>
+      <button type="button" class="btn-primary" id="android-install-button" hidden>Install app</button>
+    </div>
+    <ol id="ios-install" class="install-steps" hidden>
+      <li>Tap the <strong>Share</strong> button in Safari.</li>
+      <li>Choose <strong>Add to Home Screen</strong>.</li>
+      <li>Open <strong>Schwalbe ToolKit</strong> from your home screen.</li>
+    </ol>
+    <p class="note" id="generic-install" hidden>Use your browser menu to install or add this page to your home screen.</p>
+  </section>
+
+  <p class="note install-footer"><a href="/">Continue in browser without installing</a></p>
+</div>
+<script src="/install.js"></script>
+</body>
+</html>

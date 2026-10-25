@@ -21,7 +21,8 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 1. Scan the shipment QR, master QR, or paste the link.
 2. Add up to **26 pictures** per upload batch.
 3. Enter the pallet count, check the confirmation box, then tap **Upload All**.
-4. On the folder confirmation step, review or edit **Folder name** (defaults to the shipment folder name so pictures land in the shipment directory). Use a different name to save this batch in a **subfolder inside that shipment folder** on the desktop. Tap **Upload** to start or **Cancel** to return without uploading.
+4. On the **folder naming** step, edit **Folder name** (defaults to the shipment folder name). Use a different name to save this batch in a **subfolder** on the desktop. Tap **Back** to change pictures, or **Upload** to start.
+5. While uploading, the folder name stays visible and editable; tap **Save folder name** after changes, or **Back** to return to folder naming (your pictures stay selected). **Cancel upload** also returns to folder naming.
 5. Wait for checksum verification on the desktop before the shipment completes.
 6. During an upload, use **Edit folder** to rename the desktop subfolder; pictures already saved and any still uploading use the new path.
 7. Tap the **Home** arrow (top-left, label “Home”) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel the upload first.

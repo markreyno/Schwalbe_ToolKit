@@ -86,7 +86,7 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
     await freightMobile.getByLabel('Pallet amount', { exact: true }).fill('1');
     await freightMobile.locator('#confirm').check();
     await freightMobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-    await expect(freightMobile.locator('#folder-confirm')).toBeVisible();
+    await expect(freightMobile.locator('#folder-step')).toBeVisible();
     await freightMobile.screenshot({ path: path.join(outDir, 'freight-mobile-folder-confirm.png'), fullPage: true });
     await freightMobile.close();
   } finally {

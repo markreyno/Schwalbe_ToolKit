@@ -347,6 +347,25 @@ h1 {
 
 .btn-primary:active { background: #26343b; }
 
+.install-shell .install-steps {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: #526b79;
+}
+
+.install-footer {
+  text-align: center;
+  margin-top: 20px;
+}
+
+.install-footer a {
+  color: #315c6b;
+  font-weight: 600;
+  text-decoration: none;
+}
+
 html.pwa-installed .pwa-install-only,
 html.pwa-installed #install-banner,
 html.pwa-installed [data-pwa-install] {
