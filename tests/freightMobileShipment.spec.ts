@@ -42,7 +42,7 @@ test('phone can rename empty shipment and start a new shipment from setup', asyn
 
     await expect(mobile.locator('#title')).toHaveText('Taffej · 2026-10-08');
     await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
-    await expect(mobile.getByLabel('Upload subfolder (optional)')).toBeVisible();
+    await expect(mobile.locator('#saving-to')).toContainText('Saving to:');
     await expect(mobile.getByRole('button', { name: 'Back / New shipment', exact: true })).toBeVisible();
     await mobile.screenshot({ path: path.join(artifactDir, '01-first-screen-edit-controls.png'), fullPage: true });
 

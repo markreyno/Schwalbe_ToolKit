@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Video, FolderOpen, Edit2, X } from 'lucide-react';
 import type { PalletVisionState } from '../../../shared/protocol';
+import { CollapsibleSection } from '../../components/CollapsibleSection';
 
 export function PalletVisionCollectorPage() {
   const [state, setState] = useState<PalletVisionState>();
@@ -145,8 +146,7 @@ export function PalletVisionCollectorPage() {
             </ul>
           </div> : null}
         </section>
-        <section className="freight-panel">
-          <h2>Collected Pallets</h2>
+        <CollapsibleSection storageKey="schwalbe-collapse-palletvision-collected" title="Collected pallets">
           {!state?.pallets.length ? <p>No pallets collected yet.</p> : <table style={{ width: '100%', fontSize: '12px', marginTop: '12px' }}>
             <thead style={{ textAlign: 'left', borderBottom: '1px solid #e7eaf0' }}>
               <tr><th>ID</th><th>Dimensions</th><th>Status</th><th>Frames</th><th></th></tr>
@@ -164,7 +164,7 @@ export function PalletVisionCollectorPage() {
               </tr>)}
             </tbody>
           </table>}
-        </section>
+        </CollapsibleSection>
         
         {editing && <section className="freight-panel" style={{ background: '#f5f8fa', border: '2px solid #0d7aa3' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>

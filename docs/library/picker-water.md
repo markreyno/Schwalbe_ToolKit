@@ -2,13 +2,28 @@
 
 Track when pickers were last watered and who is due next.
 
-## Usage
+## Desktop usage
 
 1. Add pickers with name, interval (days), and last watered date.
-2. Due pickers appear in the schedule and on the hub banner.
-3. Tap **Mark watered** when complete.
+2. Due or overdue pickers appear in the schedule, tool hub badge, and workspace banner.
+3. Tap **Mark watered** when complete. Each mark appends a timestamp to that picker’s **Last watered** log (up to three entries, newest first, shown in local time).
 4. Use the calendar view for upcoming dates.
 
-## Notifications
+## Connect PWA (phone)
 
-- The hub **Test notification** banner is a demo only; it does not change schedules.
+Picker watering alerts on the phone hub are shown **only in the installed Connect PWA** (Add to Home Screen / installed app). In a normal mobile browser tab, the hub does not show watering notifications, badges, or push permission prompts.
+
+When the installed hub is open:
+
+- A **Picker watering** panel lists due/overdue pickers synced from the desktop (HTTPS to the desktop on your LAN or Tailscale).
+- **Enable push alerts** appears only in the installed app after you tap it (required for permission on iOS). Subscriptions are stored on the desktop.
+
+### Push support by platform
+
+| Platform | In-app list (installed PWA) | Web Push |
+| --- | --- | --- |
+| Android (Chrome installed PWA) | Yes | Yes, after user taps **Enable push alerts** and grants permission |
+| iPhone (Safari, installed to Home Screen, iOS 16.4+) | Yes | Yes, only from the installed PWA and only after a user gesture grants notification permission |
+| Mobile browser tab (not installed) | No | No (UI and subscription are not offered) |
+
+The hub **Test notification** demo on the desktop tool hub is separate; it does not change picker schedules.
