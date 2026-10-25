@@ -32,7 +32,8 @@ async function startFreightShipment(browser: import('@playwright/test').Browser,
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
   const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
   await mobile.goto(localUrl);
-  return { app, page, mobile, shipment, bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=', 'base64') };
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQUR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=', 'base64');
+  return { app, page, mobile, shipment, bytes };
 }
 
 async function stagePictures(mobile: import('@playwright/test').Page, bytes: Buffer, count = 1) {
@@ -42,27 +43,30 @@ async function stagePictures(mobile: import('@playwright/test').Page, bytes: Buf
   await mobile.locator('#confirm').check();
 }
 
-test('freight folder confirm cancel does not start batch', async ({ browser }) => {
+test('freight confirm cancel does not start batch', async ({ browser }) => {
   const { app, mobile, shipment, bytes } = await startFreightShipment(browser, 'Folder Cancel Co');
   await stagePictures(mobile, bytes);
   let batchStarted = false;
   mobile.on('request', req => { if (req.url().includes('/batch?')) batchStarted = true; });
-  await expect(mobile.getByLabel('Upload subfolder (optional)')).toBeVisible();
-  await mobile.getByLabel('Upload subfolder (optional)').fill('Dock');
+  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+  await expect(mobile.locator('#confirm-step')).toBeVisible();
+  await mobile.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(mobile.locator('#capture-block')).toBeVisible();
   expect(batchStarted).toBe(false);
   expect(await readdir(shipment.folder)).toHaveLength(0);
   await mobile.close();
   await app.close();
 });
 
-test('freight renamed upload lands in sanitized subfolder', async ({ browser, request }) => {
+test('desktop subfolder routes phone upload to sanitized path', async ({ browser, request }) => {
   const { app, page, mobile, shipment, bytes } = await startFreightShipment(browser, 'Folder Rename Co');
+  await page.evaluate(({ id }) => window.toolkit.freight('setSubfolder', { id, subfolder: 'Dock/../Trailers' }), { id: shipment.id });
   await stagePictures(mobile, bytes, 1);
-  await mobile.getByLabel('Upload subfolder (optional)').fill('Dock/../Trailers');
   const batchRequest = mobile.waitForRequest(r => r.url().includes('/batch?'));
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+  await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
   const batchBody = (await batchRequest).postDataJSON();
-  expect(batchBody.folderName).toBe('Dock/../Trailers');
+  expect(batchBody.folderName).toBeUndefined();
   await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
   const subPath = path.join(shipment.folder, 'Trailers');
   const subFiles = await readdir(subPath);
@@ -72,7 +76,7 @@ test('freight renamed upload lands in sanitized subfolder', async ({ browser, re
 
   const state = await page.evaluate(() => window.toolkit.freight('status'));
   const updated = state.shipments.find(s => s.id === shipment.id)!;
-  expect(updated.lastUploadSubfolder).toBe('Trailers');
+  expect(updated.saveTarget).toMatch(/Trailers$/);
 
   const api = (route: string) =>
     shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731').replace('/?', route + '&');
@@ -87,7 +91,8 @@ test('freight renamed upload lands in sanitized subfolder', async ({ browser, re
 });
 
 test('cancel upload removes empty batch subfolder', async ({ browser }) => {
-  const { app, mobile, shipment, bytes } = await startFreightShipment(browser, 'Subfolder Cancel Co');
+  const { app, page, mobile, shipment, bytes } = await startFreightShipment(browser, 'Subfolder Cancel Co');
+  await page.evaluate(({ id }) => window.toolkit.freight('setSubfolder', { id, subfolder: 'Dock A' }), { id: shipment.id });
   await stagePictures(mobile, bytes, 2);
   let releaseFirst: (() => void) | undefined;
   await mobile.route(/\/file\?/, async route => {
@@ -96,41 +101,13 @@ test('cancel upload removes empty batch subfolder', async ({ browser }) => {
     }
     await route.continue();
   });
-  await mobile.getByLabel('Upload subfolder (optional)').fill('Dock A');
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+  await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
   await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
   releaseFirst?.();
   await expect(mobile.locator('#message')).toContainText('Upload canceled');
   const rootEntries = await readdir(shipment.folder);
   expect(rootEntries).toHaveLength(0);
-  await mobile.unroute(/\/file\?/);
-  await mobile.close();
-  await app.close();
-});
-
-test('rename folder during upload moves saved files', async ({ browser }) => {
-  const { app, mobile, shipment, bytes } = await startFreightShipment(browser, 'Mid Rename Co');
-  await stagePictures(mobile, bytes, 2);
-  let releaseSecond: (() => void) | undefined;
-  await mobile.route(/\/file\?/, async route => {
-    if (route.request().url().includes('index=1')) {
-      await new Promise<void>(resolve => { releaseSecond = resolve; });
-    }
-    await route.continue();
-  });
-  await mobile.getByLabel('Upload subfolder (optional)').fill('Lane 1');
-  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await expect(mobile.locator('#folder-name-upload')).toBeVisible();
-  await mobile.locator('#folder-name-upload').fill('');
-  await mobile.locator('#folder-name-upload').fill('Lane 2');
-  await mobile.getByRole('button', { name: 'Save folder name', exact: true }).click();
-  await expect.poll(async () => mobile.locator('#message').textContent()).toContain('Lane 2');
-  const lane2 = path.join(shipment.folder, 'Lane 2');
-  await expect.poll(async () => (await readdir(lane2)).length).toBe(1);
-  releaseSecond?.();
-  await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
-  expect(await readdir(lane2)).toHaveLength(2);
-  expect(await readdir(shipment.folder)).toEqual(['Lane 2']);
   await mobile.unroute(/\/file\?/);
   await mobile.close();
   await app.close();

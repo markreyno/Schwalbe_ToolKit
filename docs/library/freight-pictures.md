@@ -13,19 +13,21 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 1. Open **Freight Pictures** and choose a parent storage folder.
 2. Keep the toolkit open and the PC awake.
 3. Create a shipment (company + date shipped) or use the **master link** for phone-side shipment selection.
-4. Choose **Local network** or **Tailscale** for the QR/link.
-5. Pick the correct desktop network address if the PC has multiple adapters.
+4. For each open shipment, choose **Subfolder for phone uploads**: pick an existing subfolder, type a new one, or **None** for the shipment folder root. Tap **Apply subfolder** before scanning the QR.
+5. Choose **Local network** or **Tailscale** for the QR/link.
+6. Pick the correct desktop network address if the PC has multiple adapters.
 
 ## Phone usage
 
 1. Scan the shipment QR, master QR, or paste the link.
-2. Add up to **26 pictures** per upload batch.
-3. Enter the pallet count, check the confirmation box, then tap **Upload All**.
-4. On the **folder naming** step, edit **Folder name** (defaults to the shipment folder name). Use a different name to save this batch in a **subfolder** on the desktop. Tap **Back** to change pictures, or **Upload** to start.
-5. While uploading, the folder name stays visible and editable; tap **Save folder name** after changes, or **Back** to return to folder naming (your pictures stay selected). **Cancel upload** also returns to folder naming.
-5. Wait for checksum verification on the desktop before the shipment completes.
-6. During an upload, use **Edit folder** to rename the desktop subfolder; pictures already saved and any still uploading use the new path.
-7. Tap the **Home** arrow (top-left, label “Home”) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel the upload first.
+2. **Edit** company/date on the header, or use **Back / New shipment** to start a new shipment without a new QR.
+3. The page shows **Saving to:** with the desktop subfolder choice (read-only on the phone).
+4. Add up to **26 pictures** per upload batch.
+5. Enter the pallet count, check the confirmation box, then tap **Upload All**.
+6. Confirm on **Ready to upload?** with **Upload** or **Cancel**.
+7. During upload use **Back** or **Cancel upload** as needed.
+8. Tap the **Home** arrow (top-left) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel first.
+9. The footer shows the app version (e.g. v1.6.4) so you can confirm which build loaded.
 
 ## Upload batch lock (1 minute)
 
@@ -33,10 +35,9 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 - **Cancel upload** on the phone stops the transfer, removes partial files, and releases the lock immediately.
 - If the phone disconnects, the lock expires after the timeout so another device can continue.
 
-## Cancel / delete / queue behavior
+## Cancel / delete behavior
 
-- **Cancel upload** aborts in-flight files and cleans partial saves on the desktop. If this batch used a new subfolder and nothing remains in it, the empty subfolder is removed.
-- **Edit folder** during upload renames or moves the batch folder on the desktop and updates paths for files already saved.
+- **Cancel upload** aborts in-flight files and cleans partial saves on the desktop. If this batch used a new empty subfolder, it may be removed when empty.
 - Completed pictures from prior batches stay in the folder; cancel does not delete finished files from earlier uploads.
 - Reupload on the desktop generates a new link; existing pictures are not shown on the phone.
 
@@ -45,7 +46,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 - Allow the toolkit on **Windows Firewall** (private network).
 - Guest Wi‑Fi that blocks device-to-device traffic will fail; use LAN or Tailscale.
 - Cross-subnet/VLAN works when routing allows private traffic between subnets.
-- If QR fails, copy/paste the link or type `http://<desktop-ip>:48731/` manually.
+- If QR fails, copy/paste the link or type `https://<desktop-host>:48731/` manually.
 
 ## Tailscale
 

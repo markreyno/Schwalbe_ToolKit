@@ -1,28 +1,7 @@
 const key = new URLSearchParams(location.search).get('key');
 const el = id => document.getElementById(id);
 let selected = [], batch = null, busy = false, mode = false, urls = [], activeXhr = null, uploadCanceled = false, finishAbort = null;
-let defaultUploadFolder = '', lastUploadSubfolder = '', currentUploadFolder = '', uiPhase = 'pick';
-
-function syncFolderInputs(from) {
-  const pick = el('folder-name-pick');
-  const value =
-    from === 'upload' ? el('folder-name-upload').value : from === 'pick' && pick ? pick.value : el('folder-name').value;
-  if (pick) pick.value = value;
-  el('folder-name').value = value;
-  el('folder-name-upload').value = value;
-}
-
-function folderNameForBatch() {
-  return (el('folder-name').value || '').trim();
-}
-
-function setUploadFolderLabel(name) {
-  currentUploadFolder = name || '';
-  const label = currentUploadFolder || defaultUploadFolder;
-  if (el('folder-name-pick')) el('folder-name-pick').value = name || lastUploadSubfolder || '';
-  el('folder-name').value = label;
-  el('folder-name-upload').value = label;
-}
+let saveTarget = '', uiPhase = 'pick';
 
 function todayLocalIso() {
   const d = new Date();
@@ -32,6 +11,11 @@ function todayLocalIso() {
 
 function setShipmentTitle(company, date) {
   el('title').textContent = company + ' · ' + date;
+}
+
+function setSavingTo(label) {
+  saveTarget = label || '';
+  if (el('saving-to')) el('saving-to').textContent = saveTarget ? 'Saving to: ' + saveTarget : '';
 }
 
 function showUploadView() {
@@ -50,16 +34,15 @@ function showShipmentSetup(prefillCompany, prefillDate) {
 function setPhase(phase) {
   uiPhase = phase;
   const picking = phase === 'pick';
-  const folder = phase === 'folder';
+  const confirm = phase === 'confirm';
   const uploading = phase === 'uploading';
   const result = phase === 'done' || phase === 'error';
   el('capture-block').hidden = !picking;
-  el('folder-step').hidden = !folder;
+  el('confirm-step').hidden = !confirm;
   el('upload-progress-panel').hidden = !uploading;
   el('upload-result').hidden = !result;
   el('send').hidden = !picking || busy;
   el('upload-more').hidden = phase !== 'done' && phase !== 'error';
-  el('back-to-folder-result').hidden = phase !== 'error';
   el('retry-upload').hidden = phase !== 'error';
 }
 
@@ -179,23 +162,6 @@ async function abortActiveBatch() {
   busy = false;
 }
 
-async function startOver() {
-  if (busy) {
-    const ok = confirm('Cancel the upload in progress and start over?');
-    if (!ok) return;
-  }
-  await abortActiveBatch();
-  batch = null;
-  selected = [];
-  el('confirm').checked = false;
-  el('pallets').value = '';
-  el('progress').value = 0;
-  render();
-  setPhase('pick');
-  if (el('folder-name-pick')) el('folder-name-pick').value = lastUploadSubfolder || '';
-  message('Start fresh: pick pictures and choose a folder name.');
-}
-
 async function applyShipmentKey(nextKey, result) {
   if (nextKey !== key) {
     location.href = '/?key=' + encodeURIComponent(nextKey);
@@ -218,41 +184,43 @@ function resetSendButton() {
   el('send').textContent = mode ? 'Reupload All' : 'Upload All';
 }
 
-function goToFolderStep() {
+function goToPickStep() {
   setCaptureDisabled(false);
-  setUploadFolderLabel(lastUploadSubfolder || '');
   setPhase('pick');
   resetSendButton();
   valid();
   message('');
 }
 
-async function returnToFolderFromUpload() {
+async function returnToPickFromUpload() {
   await abortActiveBatch();
   el('progress').value = 0;
-  goToFolderStep();
-  message('Returned to folder naming. Your pictures are still selected.');
+  goToPickStep();
+  message('Returned to picture selection. Your pictures are still selected.');
 }
 
 async function resetAfterCancel() {
-  await returnToFolderFromUpload();
+  await returnToPickFromUpload();
   message('Upload canceled');
 }
 
-el('back-to-photos').onclick = () => { setPhase('pick'); message(''); };
-el('back-to-folder').onclick = () => { void returnToFolderFromUpload(); };
+function goToConfirmStep() {
+  el('confirm-summary').textContent = selected.length + ' pictures to ' + (saveTarget || 'the desktop folder chosen on the PC') + '.';
+  setPhase('confirm');
+  message('');
+}
+
+el('back-to-photos').onclick = () => { goToPickStep(); };
+el('back-to-photos-upload').onclick = () => { void returnToPickFromUpload(); };
 el('cancel-upload').onclick = () => { void resetAfterCancel(); };
-el('back-to-folder-result').onclick = () => { goToFolderStep(); message(''); };
 el('upload-more').onclick = () => {
   batch = null;
   el('progress').value = 0;
-  goToFolderStep();
+  goToPickStep();
   message(uiPhase === 'done' ? 'Shipment complete on the desktop. Ask for a reupload link to add more pictures.' : '');
 };
 
 el('retry-upload').onclick = () => { if (busy) return; void runUpload(); };
-
-el('start-over').onclick = () => { void startOver(); };
 
 el('new-shipment-nav').onclick = () => showShipmentSetup('', todayLocalIso());
 el('cancel-new-shipment').onclick = () => { showUploadView(); message(''); };
@@ -283,26 +251,8 @@ el('save-shipment').onclick = async () => {
   } catch (err) { message(err.message); }
 };
 
-if (el('folder-name-pick')) el('folder-name-pick').oninput = () => syncFolderInputs('pick');
-
-el('send').onclick = () => {
-  if (busy) return;
-  syncFolderInputs('pick');
-  void runUpload();
-};
-
-el('confirm-upload').onclick = () => { if (busy) return; syncFolderInputs('confirm'); void runUpload(); };
-
-el('save-folder-rename').onclick = async () => {
-  if (!batch || !busy) return;
-  const name = el('folder-name-upload').value.trim();
-  el('folder-name').value = name;
-  try {
-    const r = await api('/rename-folder?batch=' + batch.id, post({ folderName: name }));
-    setUploadFolderLabel(r.uploadFolder);
-    message('Folder updated to ' + r.uploadFolder);
-  } catch (e) { message(e.message); }
-};
+el('send').onclick = () => { if (busy) return; goToConfirmStep(); };
+el('confirm-upload').onclick = () => { if (busy) return; void runUpload(); };
 
 async function runUpload() {
   uploadCanceled = false;
@@ -315,10 +265,8 @@ async function runUpload() {
     if (!batch) {
       batch = await api('/batch', post({
         pallets: Number(el('pallets').value),
-        files: selected.map(f => ({ name: f.name, size: f.size })),
-        folderName: folderNameForBatch()
+        files: selected.map(f => ({ name: f.name, size: f.size }))
       }));
-      setUploadFolderLabel(batch.uploadFolder);
     }
     for (let i = 0; i < selected.length; i++) {
       if (uploadCanceled) break;
@@ -348,7 +296,7 @@ async function runUpload() {
       return;
     }
     setPhase('error');
-    message(e.message + ' Your selected pictures remain here. Use Back to change the folder or Retry Upload.');
+    message(e.message + ' Your selected pictures remain here. Tap Back or Retry upload.');
     el('send').textContent = 'Retry Upload';
     if (/expired|not a valid image/.test(e.message)) batch = null;
   } finally {
@@ -368,6 +316,13 @@ el('create').onsubmit = async e => {
     location.href = '/?key=' + s.key;
   } catch (e) { message(e.message); button.disabled = false; }
 };
+
+async function refreshSaveTarget() {
+  try {
+    const s = await api('/state');
+    if (s.shipment?.saveTarget) setSavingTo(s.shipment.saveTarget);
+  } catch { /* ignore */ }
+}
 
 api('/state').then(s => {
   if (s.appVersion && el('app-version')) el('app-version').textContent = 'v' + s.appVersion;
@@ -389,11 +344,10 @@ api('/state').then(s => {
     showUploadView();
     setShipmentTitle(s.shipment.company, s.shipment.date);
     mode = s.shipment.reupload;
-    defaultUploadFolder = s.shipment.defaultUploadFolder || '';
-    lastUploadSubfolder = s.shipment.lastUploadSubfolder || '';
-    setUploadFolderLabel(lastUploadSubfolder || '');
+    setSavingTo(s.shipment.saveTarget);
     el('mode').textContent = mode ? 'Reupload: new pictures will be added; existing pictures are preserved.' : 'Collect your pictures, then confirm the pallet amount.';
     el('send').textContent = mode ? 'Reupload All' : 'Upload All';
     setPhase('pick');
+    setInterval(() => { void refreshSaveTarget(); }, 5000);
   }
 }).catch(e => message(e.message));

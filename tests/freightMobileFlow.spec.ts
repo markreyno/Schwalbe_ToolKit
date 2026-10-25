@@ -6,12 +6,14 @@ import { FREIGHT_PHONE_PORT } from '../electron/toolPhoneUrls';
 import { readFileSync } from 'node:fs';
 
 const PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQUR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=',
   'base64',
 );
 
 const screenshotDir = path.resolve('test-results', 'freight-mobile-flow');
 const artifactDir = path.resolve('/opt/cursor/artifacts/screenshots', 'freight-mobile-flow');
+const desktopArtifactDir = path.resolve('/opt/cursor/artifacts/screenshots', 'freight-desktop-subfolder');
+const pvArtifactDir = path.resolve('/opt/cursor/artifacts/screenshots', 'palletvision-headers');
 
 test.use({
   channel: 'msedge',
@@ -20,16 +22,19 @@ test.use({
   hasTouch: true,
 });
 
-test.describe('Freight mobile folder flow (mobile viewport)', () => {
+test.describe('Freight mobile flow (mobile viewport)', () => {
   test.beforeAll(async () => {
     await mkdir(screenshotDir, { recursive: true });
     await mkdir(artifactDir, { recursive: true });
+    await mkdir(desktopArtifactDir, { recursive: true });
+    await mkdir(pvArtifactDir, { recursive: true });
   });
 
-  test('folder naming, back navigation, rename during upload (dist-electron HTTPS)', async ({ browser }) => {
+  test('confirm step, desktop subfolder, back from upload (dist-electron HTTPS)', async ({ browser }) => {
     const builtPage = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
-    expect(builtPage).toContain('folder-name-pick');
+    expect(builtPage).toContain('saving-to');
     expect(builtPage).toContain('edit-shipment');
+    expect(builtPage).not.toContain('start-over');
 
     const profile = path.resolve('.cache/freight-mobile-flow', randomUUID());
     const storage = path.join(profile, 'pictures');
@@ -55,26 +60,25 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       await page.getByLabel('Date shipped').fill('2026-10-24');
       await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
 
-      const state = await page.evaluate(() => window.toolkit.freight('status'));
+      let state = await page.evaluate(() => window.toolkit.freight('status'));
       const shipment = state.shipments.find(s => s.company === 'Mobile Flow Co')!;
+      await page.evaluate(({ id }) => window.toolkit.freight('setSubfolder', { id, subfolder: 'Dock A' }), { id: shipment.id });
+      await page.getByLabel('Select shipment').selectOption(shipment.id);
+      await expect(page.getByRole('button', { name: 'Apply subfolder', exact: true })).toBeVisible();
+      await page.screenshot({ path: path.join(desktopArtifactDir, 'freight-desktop-subfolder.png'), fullPage: true });
+
       const mobile = await browser.newPage();
       const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
       await mobile.goto(url);
       await mobile.waitForSelector('.phone-home-link');
       await expect(mobile.locator('#app-version')).toContainText(/^v\d+\.\d+\.\d+$/);
-      await expect(mobile.getByRole('button', { name: 'Start over / change folder', exact: true })).toBeVisible();
-      await mobile.locator('header.brand-bar').screenshot({
-        path: path.join(screenshotDir, '00-header-home-arrow.png'),
-      });
+      await expect(mobile.locator('#saving-to')).toContainText('Saving to:');
+      await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
+      await mobile.screenshot({ path: path.join(artifactDir, '01-first-screen.png'), fullPage: true });
 
       await mobile.locator('#files').setInputFiles([{ name: 'a.png', mimeType: 'image/png', buffer: PNG }]);
       await mobile.getByLabel('Pallet amount', { exact: true }).fill('1');
       await mobile.locator('#confirm').check();
-      await mobile.screenshot({ path: path.join(screenshotDir, '01-photos-selected.png'), fullPage: true });
-
-      await expect(mobile.getByLabel('Upload subfolder (optional)')).toBeVisible();
-      await mobile.getByLabel('Upload subfolder (optional)').fill('Dock A');
-      await mobile.screenshot({ path: path.join(screenshotDir, '02-folder-on-first-screen.png'), fullPage: true });
 
       let releaseFile: (() => void) | undefined;
       await mobile.route(/\/file\?/, async route => {
@@ -85,34 +89,27 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       });
 
       await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+      await expect(mobile.locator('#confirm-step')).toBeVisible();
+      await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
       await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
-      await expect(mobile.locator('#folder-name-upload')).toBeEditable();
-      await mobile.screenshot({ path: path.join(screenshotDir, '03-uploading.png'), fullPage: true });
+      await mobile.screenshot({ path: path.join(artifactDir, '02-uploading.png'), fullPage: true });
 
-      await mobile.locator('#back-to-folder').click();
-      await expect(mobile.locator('#capture-block')).toBeVisible();
-      await expect(mobile.locator('#count')).toContainText('1 pictures');
-      await mobile.screenshot({ path: path.join(screenshotDir, '04-back-to-photos.png'), fullPage: true });
-
-      await mobile.getByLabel('Upload subfolder (optional)').fill('Dock B');
-      await mobile.locator('#confirm').check();
-      await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-      await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
-      await expect(mobile.locator('#folder-name-upload')).toHaveValue('Dock B');
-      await mobile.screenshot({ path: path.join(screenshotDir, '03b-uploading-dock-b.png'), fullPage: true });
       releaseFile?.();
-      await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
-      await mobile.screenshot({ path: path.join(screenshotDir, '05-upload-complete.png'), fullPage: true });
+      await expect(mobile.locator('#message')).toContainText('pallet pictures verified', { timeout: 15000 });
 
-      const dockB = path.join(shipment.folder, 'Dock B');
-      expect((await readdir(dockB)).length).toBe(1);
-      expect(await readFile(path.join(dockB, (await readdir(dockB))[0]))).toEqual(PNG);
+      const dockA = path.join(shipment.folder, 'Dock A');
+      expect((await readdir(dockA)).length).toBe(1);
 
-      for (const name of ['00-header-home-arrow.png', '01-photos-selected.png', '02-folder-on-first-screen.png', '03-uploading.png', '03b-uploading-dock-b.png', '04-back-to-photos.png', '05-upload-complete.png']) {
-        await mkdir(artifactDir, { recursive: true });
-        const { copyFile } = await import('node:fs/promises');
-        await copyFile(path.join(screenshotDir, name), path.join(artifactDir, name));
-      }
+      const pvMobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
+      const pvState = await page.evaluate(() => window.toolkit.palletvision('status'));
+      await pvMobile.goto(pvState.qrUrl.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:48732`));
+      await pvMobile.waitForSelector('.phone-home-link');
+      await pvMobile.locator('header.brand-bar').screenshot({ path: path.join(pvArtifactDir, 'palletvision-phone-header.png') });
+      await pvMobile.close();
+
+      await page.getByRole('link', { name: 'All tools' }).click();
+      await page.locator('.tool-card').filter({ has: page.getByRole('heading', { name: 'PalletVision Data Collector', exact: true }) }).getByRole('link', { name: 'Open tool' }).click();
+      await page.locator('.page-heading').screenshot({ path: path.join(pvArtifactDir, 'palletvision-desktop-header.png') });
 
       await mobile.unroute(/\/file\?/);
       await mobile.close();

@@ -3,13 +3,15 @@ import path from 'node:path';
 import { ConnectPwaServer } from './connectPwaServer';
 import type { ConnectPwaToolLink } from './toolPhoneUrls';
 import type { PhoneTlsManager } from './tls/phoneTlsManager';
+import type { PickerWaterBridge } from './pickerWaterBridge';
 
 export async function registerConnectPwa(
   window: () => BrowserWindow | null,
   tlsManager: PhoneTlsManager,
-  deps?: { toolsForHost: (host: string) => Promise<ConnectPwaToolLink[]> }
+  deps?: { toolsForHost: (host: string) => Promise<ConnectPwaToolLink[]> },
+  pickerWater?: PickerWaterBridge | null
 ) {
-  const service = new ConnectPwaServer(path.join(app.getPath('userData'), 'connect-pwa.json'), tlsManager, deps?.toolsForHost);
+  const service = new ConnectPwaServer(path.join(app.getPath('userData'), 'connect-pwa.json'), tlsManager, deps?.toolsForHost, pickerWater ?? null);
   await service.start();
   tlsManager.onReload(() => service.restartPhoneListener());
 

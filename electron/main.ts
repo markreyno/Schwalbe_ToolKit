@@ -3,6 +3,7 @@ import path from 'node:path';
 import { registerFreight } from './freight';
 import { registerPalletVision } from './palletvision';
 import { registerConnectPwa } from './connectPwa';
+import { getPickerWaterBridge, registerPickerWater } from './pickerWater';
 import { resolveConnectPwaTools } from './toolPhoneUrls';
 import { PhoneTlsManager, startCaTrustServer } from './tls';
 import { PythonBridge } from './pythonBridge';
@@ -62,13 +63,15 @@ app.whenReady().then(async () => {
   const caTrust = await startCaTrustServer(() => tlsManager.getCaPem());
   const freight = await registerFreight(() => mainWindow, tlsManager);
   const palletvision = await registerPalletVision(() => mainWindow, tlsManager);
+  await registerPickerWater(() => mainWindow);
+  const pickerWaterBridge = getPickerWaterBridge();
   await registerConnectPwa(() => mainWindow, tlsManager, {
     toolsForHost: async host => {
       const [freightStatus, palletvisionStatus] = await Promise.all([freight.status(), palletvision.status()]);
       const insecure = tlsManager.getAllowInsecureHttp() && !tlsManager.getServerTls();
       return resolveConnectPwaTools(host, freightStatus, palletvisionStatus, insecure);
     }
-  });
+  }, pickerWaterBridge);
   app.on('before-quit', () => { void caTrust.close(); });
   createWindow();
   app.on('activate', () => { if (!mainWindow) createWindow(); });

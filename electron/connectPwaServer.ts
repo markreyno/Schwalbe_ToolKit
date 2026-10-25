@@ -11,6 +11,7 @@ import type { PhoneTlsManager } from './tls/phoneTlsManager';
 import { startPhoneToolServer, type PhoneServerHandle } from './tls/phoneServer';
 import { buildPhoneAddressList, listPhoneUrlHosts } from './tls/phoneUrls';
 import { PWA_CACHE_VERSION_PLACEHOLDER } from './connectPwa/pwaCache';
+import type { PickerWaterBridge } from './pickerWaterBridge';
 
 export const CONNECT_PWA_PORT = 48734;
 const FREIGHT_PORT = 48731;
@@ -33,7 +34,8 @@ export class ConnectPwaServer {
   constructor(
     private settingsPath: string,
     private tlsManager: PhoneTlsManager,
-    private toolsForHost?: (host: string) => Promise<ConnectPwaToolLink[]>
+    private toolsForHost?: (host: string) => Promise<ConnectPwaToolLink[]>,
+    private pickerWater: PickerWaterBridge | null = null
   ) {}
 
   async start() {
@@ -215,6 +217,18 @@ export class ConnectPwaServer {
     return 'application/octet-stream';
   }
 
+  private async readJsonBody(req: http.IncomingMessage, maxBytes: number) {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > maxBytes) throw new Error('Request body too large.');
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const text = Buffer.concat(chunks).toString('utf8');
+    return text ? JSON.parse(text) : {};
+  }
+
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const clientIP = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
     if (clientIP && !isPrivateIP(clientIP)) {
@@ -228,6 +242,34 @@ export class ConnectPwaServer {
       const reach = await this.reachability();
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(reach));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/picker-water/notifications') {
+      if (!this.pickerWater) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ count: 0, items: [] }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(this.pickerWater.notifications()));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/push/vapid-public-key') {
+      const key = this.pickerWater?.vapidPublicKey();
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ publicKey: key || null }));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/push/subscribe') {
+      if (!this.pickerWater) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Push is unavailable.' }));
+        return;
+      }
+      const body = await this.readJsonBody(req, 16_384);
+      await this.pickerWater.savePushSubscription(body);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ subscribed: true }));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/tools') {

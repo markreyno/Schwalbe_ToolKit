@@ -85,7 +85,7 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
     await freightMobile.locator('#files').setInputFiles({ name: 'pallet.png', mimeType: 'image/png', buffer: bytes });
     await freightMobile.getByLabel('Pallet amount', { exact: true }).fill('1');
     await freightMobile.locator('#confirm').check();
-    await expect(freightMobile.getByLabel('Upload subfolder (optional)')).toBeVisible();
+    await expect(freightMobile.locator('#saving-to')).toContainText('Saving to:');
     await freightMobile.screenshot({ path: path.join(outDir, 'freight-mobile-first-screen.png'), fullPage: true });
     await freightMobile.close();
   } finally {

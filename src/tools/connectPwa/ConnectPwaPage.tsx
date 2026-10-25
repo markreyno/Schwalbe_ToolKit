@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Smartphone } from 'lucide-react';
 import type { ConnectPwaState } from '../../../shared/protocol';
 import { isPrivateIP } from '../../../shared/networkAllowlist';
+import { CollapsibleSection } from '../../components/CollapsibleSection';
 
 export function ConnectPwaPage() {
   const [state, setState] = useState<ConnectPwaState>();
@@ -53,8 +54,7 @@ export function ConnectPwaPage() {
     {error && <p role="alert" className="freight-error">{error}</p>}
     <div className="freight-layout">
       <div>
-        <section className="freight-panel">
-          <h2>Phone hub server</h2>
+        <CollapsibleSection storageKey="schwalbe-collapse-connect-phone-hub" title="Phone hub server" defaultOpen>
           <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable.'} Keep the toolkit open.</p>
           {state?.phoneTls && !state.phoneTls.tlsReady && <p role="alert" className="freight-error">{state.phoneTls.tlsError}</p>}
           {state?.error && <p role="alert">{state.error}</p>}
@@ -64,12 +64,12 @@ export function ConnectPwaPage() {
             {state.phoneTls.caTrustQr && <img src={state.phoneTls.caTrustQr} alt="Scan to trust desktop CA on your phone" style={{ maxWidth: 220 }}/>}
           </>}
           <label><input type="checkbox" checked={!!state?.phoneTls?.allowInsecureHttp} disabled={busy} onChange={e => void action('setAllowInsecureHttp', { enabled: e.target.checked })}/> Allow insecure HTTP (not recommended)</label>
-          <h3 style={{ marginTop: 18, fontSize: 14 }}>Reachability</h3>
+        </CollapsibleSection>
+        <CollapsibleSection storageKey="schwalbe-collapse-connect-reachability" title="Reachability">
           <p className="freight-muted">Freight Pictures (48731): {state?.reachability.freight ? 'responding' : 'not responding'}</p>
           <p className="freight-muted">PalletVision (48732): {state?.reachability.palletvision ? 'responding' : 'not responding'}</p>
-        </section>
-        <section className="freight-panel">
-          <h2>Connected devices</h2>
+        </CollapsibleSection>
+        <CollapsibleSection storageKey="schwalbe-collapse-connect-devices" title="Connected devices">
           {!state?.devices.length ? <p className="freight-muted">No phones have opened the hub yet.</p> : (
             <ul className="connect-device-list">
               {state.devices.map(device => (
@@ -81,7 +81,7 @@ export function ConnectPwaPage() {
               ))}
             </ul>
           )}
-        </section>
+        </CollapsibleSection>
       </div>
       <section className="freight-panel freight-qr">
         <h2>Scan to open phone hub</h2>

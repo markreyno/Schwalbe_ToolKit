@@ -18,6 +18,104 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+function pickerWaterUiEnabled() {
+  return !!(window.connectPwaInstall && window.connectPwaInstall.isInstalledPwa());
+}
+
+function syncPickerWaterPanelVisibility() {
+  const panel = document.getElementById('picker-water-notifications');
+  if (!panel) return false;
+  const enabled = pickerWaterUiEnabled();
+  panel.hidden = !enabled;
+  panel.setAttribute('aria-hidden', enabled ? 'false' : 'true');
+  if (!enabled) {
+    const pushBtn = document.getElementById('picker-water-push-enable');
+    const pushStatus = document.getElementById('picker-water-push-status');
+    if (pushBtn) pushBtn.hidden = true;
+    if (pushStatus) pushStatus.hidden = true;
+  }
+  return enabled;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+async function refreshPickerWaterNotifications() {
+  if (!syncPickerWaterPanelVisibility()) return;
+  const list = document.getElementById('picker-water-list');
+  const badge = document.getElementById('picker-water-badge');
+  if (!list || !badge) return;
+  try {
+    const r = await fetch('/api/picker-water/notifications', { cache: 'no-store' });
+    const data = await r.json();
+    const count = data.count || 0;
+    const items = data.items || [];
+    badge.textContent = String(count);
+    badge.hidden = count < 1;
+    if (!items.length) {
+      list.innerHTML = '<li><span>No pickers need water right now.</span></li>';
+      return;
+    }
+    list.innerHTML = items.map(item => `<li class="severity-${escapeHtml(item.severity)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.body)}</span></li>`).join('');
+  } catch {
+    list.innerHTML = '<li><span>Could not load watering alerts from the desktop.</span></li>';
+    badge.hidden = true;
+  }
+}
+
+async function maybeBindPushButton() {
+  if (!pickerWaterUiEnabled()) return;
+  const button = document.getElementById('picker-water-push-enable');
+  const status = document.getElementById('picker-water-push-status');
+  if (!button || !status) return;
+  if (!window.isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    button.hidden = true;
+    return;
+  }
+  const reg = await navigator.serviceWorker.ready.catch(() => null);
+  const existing = reg ? await reg.pushManager.getSubscription() : null;
+  if (existing) {
+    button.hidden = true;
+    status.hidden = false;
+    status.textContent = 'Push alerts are enabled for this installed app.';
+    return;
+  }
+  button.hidden = false;
+  status.hidden = true;
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const keyRes = await fetch('/api/push/vapid-public-key', { cache: 'no-store' });
+      const { publicKey } = await keyRes.json();
+      if (!publicKey) throw new Error('Push is not configured on the desktop.');
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('Notification permission was not granted.');
+      const subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subscription)
+      });
+      button.hidden = true;
+      status.hidden = false;
+      status.textContent = 'Push alerts are enabled for this installed app.';
+    } catch (e) {
+      status.hidden = false;
+      status.textContent = e.message || 'Could not enable push alerts.';
+      button.disabled = false;
+    }
+  };
+}
+
 function tileShell({ title, category, body, footer, tag }) {
   return `<div class="tool-tile-top">
       <span class="tool-icon">${ICONS[tag.icon]}</span>
@@ -76,16 +174,37 @@ async function refreshStatus() {
     else parts.push('PalletVision server not responding.');
     text.textContent = parts.join(' ');
     await loadTools();
+    if (pickerWaterUiEnabled()) {
+      await refreshPickerWaterNotifications();
+      await maybeBindPushButton();
+    } else {
+      syncPickerWaterPanelVisibility();
+    }
   } catch {
     dot.className = 'status-dot warn';
     text.textContent = 'Could not check desktop status.';
     desktopReachable = false;
     const tiles = document.getElementById('tiles');
     tiles.innerHTML = '<p class="tool-notice">Tool links are unavailable right now.</p>';
+    syncPickerWaterPanelVisibility();
   }
 }
 
 if (window.connectPwaInstall) window.connectPwaInstall.bindInstallUiVisibility();
+syncPickerWaterPanelVisibility();
+['standalone', 'fullscreen', 'minimal-ui'].forEach(mode => {
+  const mq = window.matchMedia('(display-mode: ' + mode + ')');
+  const onChange = () => {
+    if (window.connectPwaInstall) window.connectPwaInstall.bindInstallUiVisibility();
+    syncPickerWaterPanelVisibility();
+    if (pickerWaterUiEnabled()) {
+      void refreshPickerWaterNotifications();
+      void maybeBindPushButton();
+    }
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onChange);
+  else if (mq.addListener) mq.addListener(onChange);
+});
 
 let swReloading = false;
 if (window.isSecureContext && navigator.serviceWorker) {
