@@ -17,6 +17,14 @@ import { FREIGHT_PHONE_PORT } from './toolPhoneUrls';
 export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0 ? Number(process.env.FREIGHT_BATCH_TTL_MS) : 60000;
 
 const phoneHubNavJs = () => readFileSync(path.join(__dirname, 'phoneHubNav.js'), 'utf8');
+const freightMobileInlineJs = () => readFileSync(path.join(__dirname, 'freightMobileInline.js'), 'utf8');
+let freightAppVersion: string | undefined;
+function freightAppVersionLabel(): string {
+  if (!freightAppVersion) {
+    freightAppVersion = String(JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || '0.0.0');
+  }
+  return freightAppVersion;
+}
 
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
@@ -144,14 +152,72 @@ export class FreightServer {
     batch.uploadFolderLabel = path.basename(newDir);
     return { uploadFolder: batch.uploadFolderLabel };
   }
-  async create(company: string, date: string) {
+  private validateShipmentMeta(company: string, date: string) {
     if (!this.root) throw new Error('Choose the desktop storage folder first.');
-    if (typeof company !== 'string' || !company.trim() || company.length > 100 || /[<>:"/\\|?*\x00-\x1f]/.test(company) || /[. ]$/.test(company) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(date).toISOString().slice(0,10) !== date) throw new Error('Enter a valid company and shipment date. Avoid special characters in the company name.');
-    const base = company.trim() + '_' + date;
+    if (typeof company !== 'string' || !company.trim() || company.length > 100 || /[<>:"/\\|?*\x00-\x1f]/.test(company) || /[. ]$/.test(company) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(date).toISOString().slice(0, 10) !== date) {
+      throw new Error('Enter a valid company and shipment date. Avoid special characters in the company name.');
+    }
+    return { company: company.trim(), date };
+  }
+  private async mkdirShipmentFolder(company: string, date: string) {
+    const base = company + '_' + date;
     let folder = path.join(this.root, base);
-    for (let i = 2; ; i++) { try { await fs.mkdir(folder); break; } catch (e: any) { if (e.code !== 'EEXIST') throw e; folder = path.join(this.root, base + '_' + i); } }
-    const shipment: Shipment = { id: token(), token: token(), company: company.trim(), date, folder, closed: false, reupload: false, pictures: 0 };
-    this.shipments.unshift(shipment); await this.persist(); return shipment;
+    for (let i = 2; ; i++) {
+      try {
+        await fs.mkdir(folder);
+        break;
+      } catch (e: any) {
+        if (e.code !== 'EEXIST') throw e;
+        folder = path.join(this.root, base + '_' + i);
+      }
+    }
+    return folder;
+  }
+  async create(company: string, date: string) {
+    const meta = this.validateShipmentMeta(company, date);
+    const folder = await this.mkdirShipmentFolder(meta.company, meta.date);
+    const shipment: Shipment = { id: token(), token: token(), company: meta.company, date: meta.date, folder, closed: false, reupload: false, pictures: 0 };
+    this.shipments.unshift(shipment);
+    await this.persist();
+    return shipment;
+  }
+  private async shipmentFolderHasFiles(folder: string) {
+    try {
+      const entries = await fs.readdir(folder);
+      return entries.length > 0;
+    } catch {
+      return false;
+    }
+  }
+  /** Phone or desktop: rename empty shipment folder, or create a new shipment if pictures/files already exist. */
+  async updateShipmentFromPhone(shipment: Shipment, company: string, date: string) {
+    if (shipment.closed) throw new Error('This shipment is complete. Start a new shipment instead.');
+    if (this.batch && this.batch.shipment === shipment && this.batch.expires > Date.now()) {
+      throw new Error('Finish or cancel the active upload before changing the shipment.');
+    }
+    const meta = this.validateShipmentMeta(company, date);
+    if (meta.company === shipment.company && meta.date === shipment.date) {
+      return { key: shipment.token, strategy: 'unchanged' as const, company: shipment.company, date: shipment.date };
+    }
+    const hasSavedPictures = shipment.pictures > 0;
+    const folderHasFiles = await this.shipmentFolderHasFiles(shipment.folder);
+    if (hasSavedPictures || folderHasFiles) {
+      const created = await this.create(meta.company, meta.date);
+      return { key: created.token, strategy: 'created_new' as const, company: created.company, date: created.date };
+    }
+    const newFolder = await this.mkdirShipmentFolder(meta.company, meta.date);
+    try {
+      await fs.rmdir(shipment.folder);
+    } catch {
+      /* old folder not empty or missing; keep both */
+      const created = await this.create(meta.company, meta.date);
+      return { key: created.token, strategy: 'created_new' as const, company: created.company, date: created.date };
+    }
+    shipment.company = meta.company;
+    shipment.date = meta.date;
+    shipment.folder = newFolder;
+    await this.persist();
+    return { key: shipment.token, strategy: 'renamed_folder' as const, company: shipment.company, date: shipment.date };
   }
   async reopen(id: string) { const s = this.shipments.find(s => s.id === id); if (!s || !s.closed) throw new Error('Select a completed shipment.'); s.closed = false; s.reupload = true; s.token = token(); await this.persist(); }
   async setTailscaleMode(enabled: boolean) { this.useTailscale = enabled; await this.persist(); await this.restartPhoneListener(); }
@@ -185,6 +251,11 @@ export class FreightServer {
       res.end(phoneHubNavJs());
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/freightMobileInline.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(freightMobileInlineJs());
+      return;
+    }
     const key = url.searchParams.get('key');
     const shipment = this.shipments.find(s => s.token === key);
     const master = key === this.master;
@@ -201,11 +272,13 @@ export class FreightServer {
       json({
         master,
         configured: !!this.root,
+        appVersion: freightAppVersionLabel(),
         shipment: shipment && {
           company: shipment.company,
           date: shipment.date,
           closed: shipment.closed,
           reupload: shipment.reupload,
+          pictures: shipment.pictures,
           defaultUploadFolder: path.basename(shipment.folder),
           lastUploadSubfolder: shipment.lastUploadSubfolder
         },
@@ -214,7 +287,23 @@ export class FreightServer {
       return;
     }
     if (req.method === 'POST' && url.pathname === '/create' && master) { const data = JSON.parse((await this.body(req, 4096)).toString()); const s = await this.create(data.company, data.date); json({ key: s.token }); return; }
+    if (req.method === 'POST' && url.pathname === '/shipment/new') {
+      const data = JSON.parse((await this.body(req, 4096)).toString());
+      const s = await this.create(data.company, data.date);
+      json({ key: s.token, company: s.company, date: s.date });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/shipment/update' && shipment) {
+      const data = JSON.parse((await this.body(req, 4096)).toString());
+      json(await this.updateShipmentFromPhone(shipment, data.company, data.date));
+      return;
+    }
     if (!shipment || shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
+    if (req.method === 'POST' && url.pathname === '/cancel-active') {
+      if (this.batch && this.batch.shipment === shipment && this.batch.expires > Date.now()) await this.abandonBatch();
+      json({ canceled: true });
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/batch') {
       if (this.batch && this.batch.expires > Date.now()) throw new Error('An upload is already active. Retry the current batch or wait 1 minute.');
       const data = JSON.parse((await this.body(req, 100000)).toString());

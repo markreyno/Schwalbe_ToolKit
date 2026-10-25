@@ -58,19 +58,19 @@ test('cancel upload removes partial files and releases the batch lock immediatel
     });
 
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-    await mobile.locator('#confirm-upload').click();
     await expect(mobile.getByRole('button', { name: 'Cancel upload', exact: true })).toBeVisible();
     await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
     releaseFirstFile?.();
     await expect(mobile.locator('#message')).toContainText('Upload canceled');
-    await expect(mobile.locator('#folder-step')).toBeVisible();
+    await expect(mobile.locator('#capture-block')).toBeVisible();
     await expect(mobile.locator('#count')).toContainText('2 pictures');
 
     const fs = await import('node:fs/promises');
     expect(await fs.readdir(shipment.folder)).toHaveLength(0);
 
     await mobile.unroute(/\/file\?/);
-    await mobile.locator('#confirm-upload').click();
+    await mobile.locator('#confirm').check();
+    await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
     await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
     expect(await fs.readdir(shipment.folder)).toHaveLength(2);
 

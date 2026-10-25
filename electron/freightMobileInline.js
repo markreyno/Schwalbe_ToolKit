@@ -4,7 +4,10 @@ let selected = [], batch = null, busy = false, mode = false, urls = [], activeXh
 let defaultUploadFolder = '', lastUploadSubfolder = '', currentUploadFolder = '', uiPhase = 'pick';
 
 function syncFolderInputs(from) {
-  const value = from === 'upload' ? el('folder-name-upload').value : el('folder-name').value;
+  const pick = el('folder-name-pick');
+  const value =
+    from === 'upload' ? el('folder-name-upload').value : from === 'pick' && pick ? pick.value : el('folder-name').value;
+  if (pick) pick.value = value;
   el('folder-name').value = value;
   el('folder-name-upload').value = value;
 }
@@ -16,8 +19,32 @@ function folderNameForBatch() {
 function setUploadFolderLabel(name) {
   currentUploadFolder = name || '';
   const label = currentUploadFolder || defaultUploadFolder;
+  if (el('folder-name-pick')) el('folder-name-pick').value = name || lastUploadSubfolder || '';
   el('folder-name').value = label;
   el('folder-name-upload').value = label;
+}
+
+function todayLocalIso() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function setShipmentTitle(company, date) {
+  el('title').textContent = company + ' · ' + date;
+}
+
+function showUploadView() {
+  el('shipment-setup').hidden = true;
+  el('upload').hidden = false;
+}
+
+function showShipmentSetup(prefillCompany, prefillDate) {
+  el('new-company').value = prefillCompany || '';
+  el('new-date').value = prefillDate || todayLocalIso();
+  el('upload').hidden = true;
+  el('shipment-setup').hidden = false;
+  message('');
 }
 
 function setPhase(phase) {
@@ -147,14 +174,56 @@ async function abortActiveBatch() {
   const b = batch;
   batch = null;
   if (b) await api('/cancel?batch=' + b.id, { method: 'POST' }).catch(() => { });
+  else await api('/cancel-active', { method: 'POST' }).catch(() => { });
   uploadCanceled = false;
   busy = false;
 }
 
+async function startOver() {
+  if (busy) {
+    const ok = confirm('Cancel the upload in progress and start over?');
+    if (!ok) return;
+  }
+  await abortActiveBatch();
+  batch = null;
+  selected = [];
+  el('confirm').checked = false;
+  el('pallets').value = '';
+  el('progress').value = 0;
+  render();
+  setPhase('pick');
+  if (el('folder-name-pick')) el('folder-name-pick').value = lastUploadSubfolder || '';
+  message('Start fresh: pick pictures and choose a folder name.');
+}
+
+async function applyShipmentKey(nextKey, result) {
+  if (nextKey !== key) {
+    location.href = '/?key=' + encodeURIComponent(nextKey);
+    return;
+  }
+  if (result?.company && result?.date) {
+    setShipmentTitle(result.company, result.date);
+    el('edit-company').value = result.company;
+    el('edit-date').value = result.date;
+  }
+  el('shipment-edit').hidden = true;
+  if (result?.strategy === 'created_new') {
+    message('This shipment already had saved pictures, so a new shipment was created on the desktop. The previous shipment is unchanged.');
+  } else if (result?.strategy === 'renamed_folder') {
+    message('Shipment renamed on the desktop.');
+  }
+}
+
+function resetSendButton() {
+  el('send').textContent = mode ? 'Reupload All' : 'Upload All';
+}
+
 function goToFolderStep() {
   setCaptureDisabled(false);
-  setUploadFolderLabel(lastUploadSubfolder || defaultUploadFolder);
-  setPhase('folder');
+  setUploadFolderLabel(lastUploadSubfolder || '');
+  setPhase('pick');
+  resetSendButton();
+  valid();
   message('');
 }
 
@@ -183,7 +252,44 @@ el('upload-more').onclick = () => {
 
 el('retry-upload').onclick = () => { if (busy) return; void runUpload(); };
 
-el('send').onclick = () => { if (busy) return; goToFolderStep(); };
+el('start-over').onclick = () => { void startOver(); };
+
+el('new-shipment-nav').onclick = () => showShipmentSetup('', todayLocalIso());
+el('cancel-new-shipment').onclick = () => { showUploadView(); message(''); };
+el('new-shipment-form').onsubmit = async e => {
+  e.preventDefault();
+  const button = e.target.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const r = await api('/shipment/new', post({ company: el('new-company').value, date: el('new-date').value }));
+    location.href = '/?key=' + encodeURIComponent(r.key);
+  } catch (err) {
+    message(err.message);
+    button.disabled = false;
+  }
+};
+
+el('edit-shipment').onclick = () => {
+  const parts = el('title').textContent.split(' · ');
+  el('edit-company').value = parts[0] || '';
+  el('edit-date').value = parts[1] || todayLocalIso();
+  el('shipment-edit').hidden = false;
+};
+el('cancel-edit-shipment').onclick = () => { el('shipment-edit').hidden = true; };
+el('save-shipment').onclick = async () => {
+  try {
+    const r = await api('/shipment/update', post({ company: el('edit-company').value, date: el('edit-date').value }));
+    await applyShipmentKey(r.key, r);
+  } catch (err) { message(err.message); }
+};
+
+if (el('folder-name-pick')) el('folder-name-pick').oninput = () => syncFolderInputs('pick');
+
+el('send').onclick = () => {
+  if (busy) return;
+  syncFolderInputs('pick');
+  void runUpload();
+};
 
 el('confirm-upload').onclick = () => { if (busy) return; syncFolderInputs('confirm'); void runUpload(); };
 
@@ -235,6 +341,9 @@ async function runUpload() {
     message('Complete: ' + selected.length + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
   } catch (e) {
     if (uploadCanceled || e.name === 'AbortError' || e.message === '__canceled__') {
+      setPhase('pick');
+      resetSendButton();
+      valid();
       message('Upload canceled');
       return;
     }
@@ -261,6 +370,7 @@ el('create').onsubmit = async e => {
 };
 
 api('/state').then(s => {
+  if (s.appVersion && el('app-version')) el('app-version').textContent = 'v' + s.appVersion;
   if (!s.configured) { message('Choose the storage folder in the desktop toolkit first.'); return; }
   if (s.master) {
     el('master').hidden = false;
@@ -276,11 +386,12 @@ api('/state').then(s => {
   } else if (s.shipment.closed) {
     message('This shipment is complete. Select Reupload on the desktop to add pictures.');
   } else {
-    el('upload').hidden = false;
-    el('title').textContent = s.shipment.company + ' · ' + s.shipment.date;
+    showUploadView();
+    setShipmentTitle(s.shipment.company, s.shipment.date);
     mode = s.shipment.reupload;
     defaultUploadFolder = s.shipment.defaultUploadFolder || '';
     lastUploadSubfolder = s.shipment.lastUploadSubfolder || '';
+    setUploadFolderLabel(lastUploadSubfolder || '');
     el('mode').textContent = mode ? 'Reupload: new pictures will be added; existing pictures are preserved.' : 'Collect your pictures, then confirm the pallet amount.';
     el('send').textContent = mode ? 'Reupload All' : 'Upload All';
     setPhase('pick');

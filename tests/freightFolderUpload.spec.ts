@@ -47,10 +47,8 @@ test('freight folder confirm cancel does not start batch', async ({ browser }) =
   await stagePictures(mobile, bytes);
   let batchStarted = false;
   mobile.on('request', req => { if (req.url().includes('/batch?')) batchStarted = true; });
-  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await expect(mobile.locator('#folder-step')).toBeVisible();
-  await mobile.getByRole('button', { name: 'Back', exact: true }).click();
-  await expect(mobile.locator('#folder-step')).toBeHidden();
+  await expect(mobile.getByLabel('Upload subfolder (optional)')).toBeVisible();
+  await mobile.getByLabel('Upload subfolder (optional)').fill('Dock');
   expect(batchStarted).toBe(false);
   expect(await readdir(shipment.folder)).toHaveLength(0);
   await mobile.close();
@@ -60,10 +58,9 @@ test('freight folder confirm cancel does not start batch', async ({ browser }) =
 test('freight renamed upload lands in sanitized subfolder', async ({ browser, request }) => {
   const { app, page, mobile, shipment, bytes } = await startFreightShipment(browser, 'Folder Rename Co');
   await stagePictures(mobile, bytes, 1);
-  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await mobile.locator('#folder-name').fill('Dock/../Trailers');
+  await mobile.getByLabel('Upload subfolder (optional)').fill('Dock/../Trailers');
   const batchRequest = mobile.waitForRequest(r => r.url().includes('/batch?'));
-  await mobile.locator('#confirm-upload').click();
+  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
   const batchBody = (await batchRequest).postDataJSON();
   expect(batchBody.folderName).toBe('Dock/../Trailers');
   await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
@@ -99,9 +96,8 @@ test('cancel upload removes empty batch subfolder', async ({ browser }) => {
     }
     await route.continue();
   });
+  await mobile.getByLabel('Upload subfolder (optional)').fill('Dock A');
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await mobile.locator('#folder-name').fill('Dock A');
-  await mobile.locator('#confirm-upload').click();
   await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
   releaseFirst?.();
   await expect(mobile.locator('#message')).toContainText('Upload canceled');
@@ -122,9 +118,8 @@ test('rename folder during upload moves saved files', async ({ browser }) => {
     }
     await route.continue();
   });
+  await mobile.getByLabel('Upload subfolder (optional)').fill('Lane 1');
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await mobile.locator('#folder-name').fill('Lane 1');
-  await mobile.locator('#confirm-upload').click();
   await expect(mobile.locator('#folder-name-upload')).toBeVisible();
   await mobile.locator('#folder-name-upload').fill('');
   await mobile.locator('#folder-name-upload').fill('Lane 2');
