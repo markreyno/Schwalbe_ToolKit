@@ -28,8 +28,8 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
 
   test('folder naming, back navigation, rename during upload (dist-electron HTTPS)', async ({ browser }) => {
     const builtPage = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
-    expect(builtPage).toContain('folder-step');
-    expect(builtPage).toContain('folder-name-upload');
+    expect(builtPage).toContain('folder-name-pick');
+    expect(builtPage).toContain('edit-shipment');
 
     const profile = path.resolve('.cache/freight-mobile-flow', randomUUID());
     const storage = path.join(profile, 'pictures');
@@ -61,6 +61,8 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
       await mobile.goto(url);
       await mobile.waitForSelector('.phone-home-link');
+      await expect(mobile.locator('#app-version')).toContainText(/^v\d+\.\d+\.\d+$/);
+      await expect(mobile.getByRole('button', { name: 'Start over / change folder', exact: true })).toBeVisible();
       await mobile.locator('header.brand-bar').screenshot({
         path: path.join(screenshotDir, '00-header-home-arrow.png'),
       });
@@ -70,11 +72,9 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       await mobile.locator('#confirm').check();
       await mobile.screenshot({ path: path.join(screenshotDir, '01-photos-selected.png'), fullPage: true });
 
-      await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-      await expect(mobile.locator('#folder-step')).toBeVisible();
-      await expect(mobile.locator('#folder-name')).toBeEditable();
-      await mobile.locator('#folder-name').fill('Dock A');
-      await mobile.screenshot({ path: path.join(screenshotDir, '02-folder-naming.png'), fullPage: true });
+      await expect(mobile.getByLabel('Upload subfolder (optional)')).toBeVisible();
+      await mobile.getByLabel('Upload subfolder (optional)').fill('Dock A');
+      await mobile.screenshot({ path: path.join(screenshotDir, '02-folder-on-first-screen.png'), fullPage: true });
 
       let releaseFile: (() => void) | undefined;
       await mobile.route(/\/file\?/, async route => {
@@ -84,18 +84,19 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
         await route.continue();
       });
 
-      await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
+      await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
       await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
       await expect(mobile.locator('#folder-name-upload')).toBeEditable();
       await mobile.screenshot({ path: path.join(screenshotDir, '03-uploading.png'), fullPage: true });
 
       await mobile.locator('#back-to-folder').click();
-      await expect(mobile.locator('#folder-step')).toBeVisible();
+      await expect(mobile.locator('#capture-block')).toBeVisible();
       await expect(mobile.locator('#count')).toContainText('1 pictures');
-      await mobile.screenshot({ path: path.join(screenshotDir, '04-back-to-folder.png'), fullPage: true });
+      await mobile.screenshot({ path: path.join(screenshotDir, '04-back-to-photos.png'), fullPage: true });
 
-      await mobile.locator('#folder-name').fill('Dock B');
-      await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
+      await mobile.getByLabel('Upload subfolder (optional)').fill('Dock B');
+      await mobile.locator('#confirm').check();
+      await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
       await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
       await expect(mobile.locator('#folder-name-upload')).toHaveValue('Dock B');
       await mobile.screenshot({ path: path.join(screenshotDir, '03b-uploading-dock-b.png'), fullPage: true });
@@ -107,7 +108,7 @@ test.describe('Freight mobile folder flow (mobile viewport)', () => {
       expect((await readdir(dockB)).length).toBe(1);
       expect(await readFile(path.join(dockB, (await readdir(dockB))[0]))).toEqual(PNG);
 
-      for (const name of ['00-header-home-arrow.png', '01-photos-selected.png', '02-folder-naming.png', '03-uploading.png', '03b-uploading-dock-b.png', '04-back-to-folder.png', '05-upload-complete.png']) {
+      for (const name of ['00-header-home-arrow.png', '01-photos-selected.png', '02-folder-on-first-screen.png', '03-uploading.png', '03b-uploading-dock-b.png', '04-back-to-photos.png', '05-upload-complete.png']) {
         await mkdir(artifactDir, { recursive: true });
         const { copyFile } = await import('node:fs/promises');
         await copyFile(path.join(screenshotDir, name), path.join(artifactDir, name));
