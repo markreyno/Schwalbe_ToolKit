@@ -19,7 +19,7 @@ test.describe('Connect PWA server', () => {
         title: 'Freight Pictures',
         category: 'SHIPPING & WAREHOUSE',
         ready: true,
-        url: `http://${host}:48731/?key=test-shipment`
+        url: `http://${host}:48731/`
       },
       {
         id: 'palletvision-collector' as const,
@@ -99,7 +99,7 @@ test.describe('Connect PWA server', () => {
     expect(resp.ok).toBe(true);
     const data = await resp.json();
     expect(data.host).toBe('192.168.77.3');
-    expect(data.tools[0].url).toBe('http://192.168.77.3:48731/?key=test-shipment');
+    expect(data.tools[0].url).toBe('http://192.168.77.3:48731/');
     expect(data.tools[1].url).toBe('http://192.168.77.3:48732/');
   });
 
@@ -107,7 +107,7 @@ test.describe('Connect PWA server', () => {
     const resp = await fetch(`${baseUrl}/api/tools?host=desk.tailnet.ts.net`);
     expect(resp.ok).toBe(true);
     const data = await resp.json();
-    expect(data.tools[0].url).toBe('http://desk.tailnet.ts.net:48731/?key=test-shipment');
+    expect(data.tools[0].url).toBe('http://desk.tailnet.ts.net:48731/');
     expect(data.tools[1].url).toBe('http://desk.tailnet.ts.net:48732/');
   });
 

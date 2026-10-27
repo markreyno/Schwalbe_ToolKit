@@ -288,7 +288,35 @@ export class FreightServer {
       res.end(freightMobileInlineJs());
       return;
     }
+    const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     const key = url.searchParams.get('key');
+    if (!key) {
+      if (req.headers.origin) {
+        const originHost = new URL(req.headers.origin).host;
+        if (originHost !== req.headers.host) {
+          throw new Error('Invalid request origin. Origin host does not match request host.');
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+        res.end(mobilePage);
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/state') {
+        json({ hubEntry: true, configured: !!this.root, appVersion: freightAppVersionLabel() });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/shipment/new') {
+        if (!this.root) throw new Error('Choose the storage folder in the desktop toolkit first.');
+        const data = JSON.parse((await this.body(req, 4096)).toString());
+        const s = await this.create(data.company, data.date);
+        json({ key: s.token, company: s.company, date: s.date });
+        return;
+      }
+      res.writeHead(403);
+      res.end('Invalid Freight Pictures link.');
+      return;
+    }
     const shipment = this.shipments.find(s => s.token === key);
     const master = key === this.master;
     if (!master && !shipment) { res.writeHead(403); res.end('Invalid Freight Pictures link.'); return; }
@@ -298,7 +326,6 @@ export class FreightServer {
         throw new Error('Invalid request origin. Origin host does not match request host.');
       }
     }
-    const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(mobilePage); return; }
     if (req.method === 'GET' && url.pathname === '/state') {
       json({

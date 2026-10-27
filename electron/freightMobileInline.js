@@ -1,4 +1,5 @@
 const key = new URLSearchParams(location.search).get('key');
+const ACTIVE_SESSION_KEY = 'schwalbe-freight-phone-active';
 const el = id => document.getElementById(id);
 let selected = [], batch = null, busy = false, mode = false, urls = [], activeXhr = null, uploadCanceled = false, finishAbort = null;
 let saveTarget = '', uiPhase = 'pick';
@@ -46,8 +47,18 @@ function setPhase(phase) {
   el('retry-upload').hidden = phase !== 'error';
 }
 
+function markActiveShipmentSession() {
+  if (!key) return;
+  try { sessionStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ key })); } catch { /* private mode */ }
+}
+
+function clearActiveShipmentSession() {
+  try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch { /* ignore */ }
+}
+
 async function api(route, options = {}) {
-  const r = await fetch(route + (route.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key), options);
+  const keyQuery = key ? (route.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key) : '';
+  const r = await fetch(route + keyQuery, options);
   const d = await r.json();
   if (!r.ok) throw Error(d.error || 'Upload failed');
   return d;
@@ -327,6 +338,11 @@ async function refreshSaveTarget() {
 api('/state').then(s => {
   if (s.appVersion && el('app-version')) el('app-version').textContent = 'v' + s.appVersion;
   if (!s.configured) { message('Choose the storage folder in the desktop toolkit first.'); return; }
+  if (s.hubEntry || !key) {
+    clearActiveShipmentSession();
+    showShipmentSetup('', todayLocalIso());
+    return;
+  }
   if (s.master) {
     el('master').hidden = false;
     for (const f of s.shipments) {
@@ -342,6 +358,7 @@ api('/state').then(s => {
     message('This shipment is complete. Select Reupload on the desktop to add pictures.');
   } else {
     showUploadView();
+    markActiveShipmentSession();
     setShipmentTitle(s.shipment.company, s.shipment.date);
     mode = s.shipment.reupload;
     setSavingTo(s.shipment.saveTarget);

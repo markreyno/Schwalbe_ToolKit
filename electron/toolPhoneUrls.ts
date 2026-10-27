@@ -80,24 +80,20 @@ export function resolveConnectPwaTools(
       message: 'Freight Pictures upload server is not running. Keep the toolkit open on the desktop.'
     });
   } else {
-    const openShipment = freight.shipments.find(s => !s.closed);
-    if (!openShipment) {
-      tools.push({
-        id: 'freight-pictures',
-        title: 'Freight Pictures',
-        category: 'SHIPPING & WAREHOUSE',
-        ready: false,
-        message: 'Open Freight Pictures on the desktop and create or select an open shipment first.'
-      });
-    } else {
-      tools.push({
-        id: 'freight-pictures',
-        title: 'Freight Pictures',
-        category: 'SHIPPING & WAREHOUSE',
-        ready: true,
-        url: rewriteToolUrlForHost(openShipment.url, host, FREIGHT_PHONE_PORT, freight.addresses, insecure)
-      });
-    }
+    const hubOrigin = rewriteToolUrlForHost(
+      `${freight.addresses[0] || buildPhoneOrigin(host, FREIGHT_PHONE_PORT, insecure)}/`,
+      host,
+      FREIGHT_PHONE_PORT,
+      freight.addresses,
+      insecure
+    );
+    tools.push({
+      id: 'freight-pictures',
+      title: 'Freight Pictures',
+      category: 'SHIPPING & WAREHOUSE',
+      ready: true,
+      url: hubOrigin.replace(/\?.*$/, '').replace(/\/$/, '') + '/'
+    });
   }
 
   if (!palletvision.running) {
