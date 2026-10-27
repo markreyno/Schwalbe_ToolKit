@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 test.use({ channel: 'msedge' });
 
@@ -122,6 +122,19 @@ test('batch lock expires after FREIGHT_BATCH_TTL_MS', async ({ request }) => {
     };
     const first = await request.post(api('/batch?'), { data: manifest });
     expect(first.status()).toBe(200);
+    const firstBody = await first.json();
+    const resumed = await request.post(api('/batch?'), { data: manifest });
+    expect(resumed.status()).toBe(200);
+    expect((await resumed.json()).resumed).toBe(true);
+
+    const pictureHash = createHash('sha256').update(bytes).digest('hex');
+    const fileUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731').replace('/?', `/file?batch=${firstBody.id}&index=0&`);
+    const uploaded = await request.post(fileUrl, {
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Picture-SHA256': pictureHash },
+      data: bytes,
+    });
+    expect(uploaded.status(), await uploaded.text()).toBe(200);
+
     const blocked = await request.post(api('/batch?'), { data: manifest });
     expect(blocked.status()).toBe(400);
     expect((await blocked.json()).error).toContain('wait 1 minute');

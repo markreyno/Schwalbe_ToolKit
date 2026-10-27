@@ -1,6 +1,8 @@
 const key = new URLSearchParams(location.search).get('key');
 const ACTIVE_SESSION_KEY = 'schwalbe-freight-phone-active';
+const LEAVE_PAGE_HINT = 'You can leave this page. Uploads continue when you come back to Freight Pictures.';
 const el = id => document.getElementById(id);
+const uploadQueue = () => window.FreightUploadQueue;
 let selected = [], batch = null, busy = false, mode = false, urls = [], activeXhr = null, uploadCanceled = false, finishAbort = null;
 let saveTarget = '', uiPhase = 'pick';
 
@@ -128,7 +130,7 @@ function preparePicture(file) {
   }));
   preparation.set(file, promise); preparationQueue = promise.then(() => { }); return promise;
 }
-function uploadPicture(file, index, hash) {
+function uploadPicture(blob, index, hash) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest(); activeXhr = xhr;
     xhr.open('POST', '/file?batch=' + batch.id + '&index=' + index + '&key=' + encodeURIComponent(key));
@@ -137,8 +139,9 @@ function uploadPicture(file, index, hash) {
       if (uploadCanceled) return;
       if (e.lengthComputable) {
         const fraction = e.loaded / e.total;
-        el('progress').value = (index + fraction) / selected.length;
-        message('Uploading picture ' + (index + 1) + ' of ' + selected.length + ' · ' + Math.round(fraction * 100) + '%' + (fraction === 1 ? ' — saving on desktop…' : ''));
+        const total = Number(el('progress').max) || selected.length || 1;
+        el('progress').value = (index + fraction) / total;
+        message('Uploading picture ' + (index + 1) + ' of ' + total + ' · ' + Math.round(fraction * 100) + '%' + (fraction === 1 ? ' — saving on desktop…' : '') + '\n' + LEAVE_PAGE_HINT);
       }
     };
     xhr.onload = () => {
@@ -153,7 +156,7 @@ function uploadPicture(file, index, hash) {
     xhr.onabort = () => { if (activeXhr === xhr) activeXhr = null; reject(Error('__canceled__')); };
     xhr.onerror = () => { if (activeXhr === xhr) activeXhr = null; reject(uploadCanceled ? Error('__canceled__') : Error('Connection interrupted. Check Wi-Fi and keep the toolkit open.')); };
     xhr.ontimeout = () => { if (activeXhr === xhr) activeXhr = null; reject(Error('Upload timed out. Retry the upload.')); };
-    xhr.send(file);
+    xhr.send(blob);
   });
 }
 
@@ -169,6 +172,7 @@ async function abortActiveBatch() {
   batch = null;
   if (b) await api('/cancel?batch=' + b.id, { method: 'POST' }).catch(() => { });
   else await api('/cancel-active', { method: 'POST' }).catch(() => { });
+  await uploadQueue()?.clearPending();
   uploadCanceled = false;
   busy = false;
 }
@@ -265,39 +269,78 @@ el('save-shipment').onclick = async () => {
 el('send').onclick = () => { if (busy) return; goToConfirmStep(); };
 el('confirm-upload').onclick = () => { if (busy) return; void runUpload(); };
 
-async function runUpload() {
+async function ensureBatchOnServer(pending) {
+  const files = pending.files.map(f => ({ name: f.name, size: f.size, hash: f.hash }));
+  const body = {
+    pallets: pending.pallets,
+    files,
+    batchId: pending.batchId || undefined
+  };
+  const created = await api('/batch', post(body));
+  batch = created;
+  if (created.id && created.id !== pending.batchId) await uploadQueue().setBatchId(created.id);
+  if (created.uploadFolder) setSavingTo(created.uploadFolder);
+  return created;
+}
+
+async function drainUploadQueue(resuming) {
+  const Q = uploadQueue();
+  if (!Q) throw Error('Upload queue is unavailable. Refresh and try again.');
+  const pending = await Q.getPending();
+  if (!pending) throw Error('No pictures are queued for upload.');
+  if (pending.shipmentKey !== key) {
+    location.href = '/?key=' + encodeURIComponent(pending.shipmentKey);
+    return;
+  }
+  const { total, uploaded } = Q.pendingProgress(pending);
+  el('progress').max = total;
+  el('progress').value = uploaded / total;
+  if (!batch) await ensureBatchOnServer(pending);
+  for (let i = 0; i < pending.files.length; i++) {
+    if (uploadCanceled) break;
+    if (pending.uploadedIndices.includes(i)) continue;
+    const fileRec = pending.files[i];
+    message((resuming ? 'Resuming upload: ' : 'Uploading picture ') + (i + 1) + ' of ' + total + '…\n' + LEAVE_PAGE_HINT);
+    await uploadPicture(fileRec.blob, i, fileRec.hash);
+    if (uploadCanceled) break;
+    await Q.markIndexUploaded(i);
+    el('progress').value = (i + 1) / total;
+  }
+  if (uploadCanceled) return;
+  message('Verifying every picture on the desktop…');
+  finishAbort = new AbortController();
+  await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
+  finishAbort = null;
+  batch = null;
+  await Q.clearPending();
+  setPhase('done');
+  message('Complete: ' + total + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
+}
+
+async function runUpload(resuming) {
   uploadCanceled = false;
   busy = true;
   valid();
   setPhase('uploading');
   setCaptureDisabled(true);
-  message('Starting upload…');
   try {
-    if (!batch) {
-      batch = await api('/batch', post({
+    const Q = uploadQueue();
+    if (!Q) throw Error('Upload queue is unavailable. Refresh and try again.');
+    if (!resuming) {
+      message('Saving pictures on this device before upload…\n' + LEAVE_PAGE_HINT);
+      const hashFile = async file => {
+        const prepared = await preparePicture(file);
+        if (prepared.error) throw Error(prepared.error);
+        return prepared.hash;
+      };
+      await Q.createFromSelection({
+        shipmentKey: key,
         pallets: Number(el('pallets').value),
-        files: selected.map(f => ({ name: f.name, size: f.size }))
-      }));
+        files: selected,
+        hashFile
+      });
     }
-    for (let i = 0; i < selected.length; i++) {
-      if (uploadCanceled) break;
-      message('Preparing picture ' + (i + 1) + ' of ' + selected.length + '…');
-      const prepared = await preparePicture(selected[i]);
-      if (uploadCanceled) break;
-      if (prepared.error) throw Error(prepared.error);
-      message('Uploading picture ' + (i + 1) + ' of ' + selected.length + '…');
-      await uploadPicture(selected[i], i, prepared.hash);
-      if (uploadCanceled) break;
-      el('progress').value = (i + 1) / selected.length;
-    }
-    if (uploadCanceled) return;
-    message('Verifying every picture on the desktop…');
-    finishAbort = new AbortController();
-    await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
-    finishAbort = null;
-    batch = null;
-    setPhase('done');
-    message('Complete: ' + selected.length + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
+    await drainUploadQueue(!!resuming);
   } catch (e) {
     if (uploadCanceled || e.name === 'AbortError' || e.message === '__canceled__') {
       setPhase('pick');
@@ -307,7 +350,7 @@ async function runUpload() {
       return;
     }
     setPhase('error');
-    message(e.message + ' Your selected pictures remain here. Tap Back or Retry upload.');
+    message(e.message + ' Your pictures stay saved on this device. Reopen Freight Pictures or tap Retry upload.\n' + LEAVE_PAGE_HINT);
     el('send').textContent = 'Retry Upload';
     if (/expired|not a valid image/.test(e.message)) batch = null;
   } finally {
@@ -317,6 +360,62 @@ async function runUpload() {
     if (uiPhase === 'pick') valid();
   }
 }
+
+async function maybeRedirectForPendingQueue() {
+  const Q = uploadQueue();
+  if (!Q) return false;
+  const pending = await Q.getPending();
+  if (!pending?.shipmentKey) return false;
+  if (!key || key !== pending.shipmentKey) {
+    location.href = '/?key=' + encodeURIComponent(pending.shipmentKey);
+    return true;
+  }
+  return false;
+}
+
+async function resumePendingUploadIfAny(state) {
+  const Q = uploadQueue();
+  if (!Q || busy) return false;
+  const pending = await Q.getPending();
+  if (!pending || pending.shipmentKey !== key) return false;
+  const { total, uploaded } = Q.pendingProgress(pending);
+  if (uploaded >= total && total > 0) {
+    await Q.clearPending();
+    return false;
+  }
+  showUploadView();
+  markActiveShipmentSession();
+  if (state?.shipment) {
+    setShipmentTitle(state.shipment.company, state.shipment.date);
+    mode = state.shipment.reupload;
+    setSavingTo(state.shipment.saveTarget);
+    el('mode').textContent = mode ? 'Reupload: new pictures will be added; existing pictures are preserved.' : 'Collect your pictures, then confirm the pallet amount.';
+    el('send').textContent = mode ? 'Reupload All' : 'Upload All';
+  }
+  el('pallets').value = String(pending.pallets);
+  message('Resuming upload: ' + Math.min(uploaded + 1, total) + ' of ' + total + ' pictures\n' + LEAVE_PAGE_HINT);
+  await runUpload(true);
+  return true;
+}
+
+function tryResumeWhenIdle() {
+  if (busy || !key) return;
+  const Q = uploadQueue();
+  if (!Q) return;
+  void Q.getPending().then(pending => {
+    if (!pending || pending.shipmentKey !== key) return;
+    const { uploaded, total } = Q.pendingProgress(pending);
+    if (uploaded >= total) return;
+    void api('/state')
+      .then(s => resumePendingUploadIfAny(s))
+      .catch(() => { });
+  });
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') tryResumeWhenIdle();
+});
+window.addEventListener('online', tryResumeWhenIdle);
 
 el('create').onsubmit = async e => {
   e.preventDefault();
@@ -335,10 +434,12 @@ async function refreshSaveTarget() {
   } catch { /* ignore */ }
 }
 
-api('/state').then(s => {
+api('/state').then(async s => {
   if (s.appVersion && el('app-version')) el('app-version').textContent = 'v' + s.appVersion;
   if (!s.configured) { message('Choose the storage folder in the desktop toolkit first.'); return; }
+  if (await maybeRedirectForPendingQueue()) return;
   if (s.hubEntry || !key) {
+    if (await resumePendingUploadIfAny(s)) return;
     clearActiveShipmentSession();
     showShipmentSetup('', todayLocalIso());
     return;
@@ -357,6 +458,7 @@ api('/state').then(s => {
   } else if (s.shipment.closed) {
     message('This shipment is complete. Select Reupload on the desktop to add pictures.');
   } else {
+    if (await resumePendingUploadIfAny(s)) return;
     showUploadView();
     markActiveShipmentSession();
     setShipmentTitle(s.shipment.company, s.shipment.date);
