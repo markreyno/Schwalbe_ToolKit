@@ -68,11 +68,7 @@ export function ConnectPwaPage() {
             <p className="freight-muted">Trust URL (HTTP, CA only): <code>{tls.caTrustHttpUrl}</code></p>
             {tls.caTrustQr && <img src={tls.caTrustQr} alt="Scan to trust desktop CA on your phone" style={{ maxWidth: 220 }}/>}
           </>}
-          <label>
-            <input type="checkbox" checked={!!tls?.phoneUseHttps} disabled={busy} onChange={e => void action('setPhoneUseHttps', { enabled: e.target.checked })}/>
-            Use HTTPS for phone tools (requires certificate setup; off by default)
-          </label>
-          {httpMode && <p className="freight-muted">PWA install, service worker caching, and push notifications for Picker Water need HTTPS. The hub and uploads work in the browser over HTTP.</p>}
+          {httpMode && <p className="freight-muted">Phone tools use HTTP. PWA install, offline caching, and push notifications require HTTPS (disabled in this release). The hub and uploads work in the browser over HTTP.</p>}
         </CollapsibleSection>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-reachability" title="Reachability">
           <p className="freight-muted">Freight Pictures (48731): {state?.reachability.freight ? 'responding' : 'not responding'}</p>

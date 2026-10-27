@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import https from 'node:https';
 import http from 'node:http';
+import fs from 'node:fs/promises';
 import { rm } from 'node:fs/promises';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
 import { PhoneTlsManager } from '../electron/tls/phoneTlsManager';
@@ -43,6 +44,19 @@ test.describe('phone TLS infrastructure', () => {
     const status = await manager.publicStatus(false, '127.0.0.1');
     expect(status.mode).toBe('http');
     expect(status.installHttpsUrl).toMatch(/^http:\/\//);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test('load migrates legacy usePhoneHttps=true to HTTP', async () => {
+    const root = path.resolve('.cache/phone-tls-migrate', randomUUID());
+    await fs.mkdir(root, { recursive: true });
+    const settingsPath = path.join(root, 'phone-tls-settings.json');
+    await fs.writeFile(settingsPath, JSON.stringify({ usePhoneHttps: true }));
+    const manager = new PhoneTlsManager(root);
+    await manager.load();
+    expect(manager.getPhoneUseHttps()).toBe(false);
+    const saved = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
+    expect(saved.usePhoneHttps).toBe(false);
     await rm(root, { recursive: true, force: true });
   });
 

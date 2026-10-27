@@ -1,7 +1,7 @@
 (function () {
   const HUB_PORT = 48734;
   function hubUrl() {
-    return 'https://' + location.hostname + ':' + HUB_PORT + '/';
+    return 'http://' + location.hostname + ':' + HUB_PORT + '/';
   }
   function goHome() {
     const hook = window.phoneHubNavOnBeforeLeave;

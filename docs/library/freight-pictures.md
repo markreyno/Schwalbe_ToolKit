@@ -46,7 +46,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 - Allow the toolkit on **Windows Firewall** (private network).
 - Guest Wi‑Fi that blocks device-to-device traffic will fail; use LAN or Tailscale.
 - Cross-subnet/VLAN works when routing allows private traffic between subnets.
-- If QR fails, copy/paste the link or type `https://<desktop-host>:48731/` manually.
+- If QR fails, copy/paste the link or type `http://<desktop-host>:48731/` manually.
 
 ## Tailscale
 

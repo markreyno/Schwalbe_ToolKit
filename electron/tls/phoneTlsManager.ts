@@ -57,17 +57,17 @@ export class PhoneTlsManager {
 
   async load() {
     try {
-      const data = JSON.parse(await fs.readFile(this.settingsPath, 'utf8')) as Settings;
-      if (typeof data.usePhoneHttps === 'boolean') {
-        this.usePhoneHttps = data.usePhoneHttps;
-      } else if (typeof data.allowInsecureHttp === 'boolean') {
-        // Legacy: "allow insecure HTTP" meant HTTP was permitted (inverse of required HTTPS).
-        this.usePhoneHttps = !data.allowInsecureHttp;
-      }
+      await fs.readFile(this.settingsPath, 'utf8');
     } catch (e: any) {
       if (e.code !== 'ENOENT') this.tlsError = 'Could not read phone TLS settings.';
     }
-    if (!this.usePhoneHttps) this.lastMode = 'http';
+    // v1.6.6+: always use plain HTTP for phone tools; migrate away from legacy HTTPS settings.
+    this.usePhoneHttps = false;
+    this.lastMode = 'http';
+    this.serverTls = null;
+    this.usingTailscaleCert = false;
+    await fs.mkdir(path.dirname(this.settingsPath), { recursive: true });
+    await fs.writeFile(this.settingsPath, JSON.stringify({ usePhoneHttps: false }));
   }
 
   getPhoneUseHttps() {
