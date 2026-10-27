@@ -3,7 +3,7 @@ export type Operation = 'counter.open' | 'counter.increment' | 'counter.close' |
 export interface ToolkitAPI {
   freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open' | 'setTailscale' | 'setAllowInsecureHttp' | 'setSubfolder', data?: { company?: string; date?: string; id?: string; enabled?: boolean; subfolder?: string }): Promise<FreightState>;
   palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale' | 'setAllowInsecureHttp' | 'update' | 'import' | 'selectVideo', data?: { id?: string; enabled?: boolean; videoPath?: string; heightInches?: number; widthInches?: number; lengthInches?: number; notes?: string; referenceId?: string; updates?: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean } }): Promise<PalletVisionState & { videoPath?: string | null }>;
-  connectPwa(action: 'status' | 'setTailscale' | 'setManualAddress' | 'setAllowInsecureHttp', data?: { enabled?: boolean; address?: string }): Promise<ConnectPwaState>;
+  connectPwa(action: 'status' | 'setTailscale' | 'setManualAddress' | 'setPhoneUseHttps' | 'setAllowInsecureHttp', data?: { enabled?: boolean; address?: string; usePhoneHttps?: boolean }): Promise<ConnectPwaState>;
   pickerWater(action: 'sync', data?: { pickers?: { id: string; name: string; intervalDays: number; lastWatered: string; wateringLog?: string[] }[] }): Promise<{ ok: boolean }>;
   updates(action: 'status' | 'check' | 'download' | 'install'): Promise<UpdateState>;
   onUpdateState(callback: (state: UpdateState) => void): () => void;
@@ -29,7 +29,24 @@ declare global { interface Window { toolkit: ToolkitAPI } }
 
 export type PalletPreview = { company: string; labels: string[]; labelCount: number; lastLabel: string };
 
-export type PhoneTlsState = { tlsReady: boolean; tlsError: string; allowInsecureHttp: boolean; mode: 'tailscale' | 'local' | 'insecure' | 'pending'; caFingerprint: string; caTrustHttpUrl: string; caTrustQr: string; usingTailscaleCert: boolean };
+export type PhoneTlsState = {
+  tlsReady: boolean;
+  tlsError: string;
+  /** @deprecated Use phoneUseHttps */
+  allowInsecureHttp: boolean;
+  phoneUseHttps: boolean;
+  mode: 'tailscale' | 'insecure' | 'local' | 'http' | 'pending';
+  caFingerprint: string;
+  caTrustHttpUrl: string;
+  caTrustQr: string;
+  usingTailscaleCert: boolean;
+  tlsHostname: string;
+  leafSans: string[];
+  leafExpiresAt: string;
+  sanCoversHostname: boolean;
+  requiresCaTrust: boolean;
+  installHttpsUrl: string;
+};
 export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; phoneTls: PhoneTlsState; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string; phoneSubfolder?: string; saveTarget?: string; subfolders?: string[]; url: string; qr: string }[] };
 
 export type PalletVisionEvent =

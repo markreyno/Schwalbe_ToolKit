@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import https from 'node:https';
+import http from 'node:http';
 import { rm } from 'node:fs/promises';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
 import { PhoneTlsManager } from '../electron/tls/phoneTlsManager';
@@ -21,7 +22,30 @@ function httpsGet(url: string): Promise<{ status: number; body: string }> {
   });
 }
 
+function httpGet(url: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, res => {
+      const chunks: Buffer[] = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+  });
+}
+
 test.describe('phone TLS infrastructure', () => {
+  test('phone TLS defaults to HTTP mode', async () => {
+    const root = path.resolve('.cache/phone-tls-default', randomUUID());
+    const manager = new PhoneTlsManager(root);
+    await manager.load();
+    expect(manager.getPhoneHttpMode()).toBe(true);
+    expect(manager.getPhoneUseHttps()).toBe(false);
+    const status = await manager.publicStatus(false, '127.0.0.1');
+    expect(status.mode).toBe('http');
+    expect(status.installHttpsUrl).toMatch(/^http:\/\//);
+    await rm(root, { recursive: true, force: true });
+  });
+
   test('local CA material includes LAN IP in SANs', async () => {
     const root = path.resolve('.cache/phone-tls-unit', randomUUID());
     const material = await ensureLocalTlsMaterial(root);
@@ -30,9 +54,30 @@ test.describe('phone TLS infrastructure', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test('phone tool server serves HTTPS', async () => {
-    const root = path.resolve('.cache/phone-tls-server', randomUUID());
+  test('phone tool server serves HTTP by default', async () => {
+    const root = path.resolve('.cache/phone-tls-http', randomUUID());
     const manager = await createTestPhoneTlsManager(root);
+    const port = 48798;
+    const handle = await startPhoneToolServer({
+      port,
+      tls: manager.getServerTls(),
+      allowInsecureHttp: manager.getPhoneHttpMode(),
+      handler: (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('http-ok');
+      }
+    });
+    const plain = await httpGet(`http://127.0.0.1:${port}/`);
+    expect(plain.status).toBe(200);
+    expect(plain.body).toBe('http-ok');
+
+    await handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test('phone tool server serves HTTPS when enabled', async () => {
+    const root = path.resolve('.cache/phone-tls-server', randomUUID());
+    const manager = await createTestPhoneTlsManager(root, { usePhoneHttps: true });
     const port = 48799;
     const handle = await startPhoneToolServer({
       port,
@@ -55,6 +100,7 @@ test.describe('phone TLS infrastructure', () => {
     const root = path.resolve('.cache/phone-tls-ca', randomUUID());
     await ensureLocalTlsMaterial(root);
     const manager = new PhoneTlsManager(root);
+    await manager.setPhoneUseHttps(true);
     await manager.refreshServerTls(false);
     const caServer = await startCaTrustServer(() => manager.getCaPem());
     const caResp = await fetch('http://127.0.0.1:48730/ca.crt');
@@ -67,7 +113,7 @@ test.describe('phone TLS infrastructure', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test('buildPhoneOrigin always uses https unless insecure', () => {
+  test('buildPhoneOrigin uses http when insecure', () => {
     expect(buildPhoneOrigin('192.168.1.5', 48731)).toBe('https://192.168.1.5:48731');
     expect(buildPhoneOrigin('192.168.1.5', 48731, true)).toBe('http://192.168.1.5:48731');
   });

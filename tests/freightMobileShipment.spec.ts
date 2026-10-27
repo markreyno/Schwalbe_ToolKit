@@ -37,7 +37,7 @@ test('phone can rename empty shipment and start a new shipment from setup', asyn
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'Taffej')!;
     const mobile = await browser.newPage({ ignoreHTTPSErrors: true });
-    const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
+    const url = shipment.url.replace(/^https?:\/\/[^/]+/, `http://127.0.0.1:${FREIGHT_PHONE_PORT}`);
     await mobile.goto(url);
 
     await expect(mobile.locator('#title')).toHaveText('Taffej · 2026-10-08');

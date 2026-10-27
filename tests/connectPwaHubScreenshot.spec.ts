@@ -34,7 +34,7 @@ test('capture connect hub screenshot', async ({ browser }) => {
     isMobile: true,
     hasTouch: true
   });
-  await page.goto(`https://127.0.0.1:${CONNECT_PWA_PORT}/`);
+  await page.goto(`http://127.0.0.1:${CONNECT_PWA_PORT}/`);
   await page.getByRole('heading', { name: 'Warehouse tools', level: 1 }).waitFor();
   await page.getByRole('heading', { name: 'Freight Pictures', level: 3 }).waitFor();
   await page.screenshot({ path: out, fullPage: true });

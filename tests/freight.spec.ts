@@ -20,7 +20,7 @@ test('freight mobile upload verifies original files, closes links, reuploads and
     await expect(page.locator('.freight-shipment')).toContainText('Awaiting pictures');
     await page.screenshot({ path: 'test-results/freight-desktop.png' });
     let state = await page.evaluate(() => window.toolkit.freight('status'));
-    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
+    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await mobile.goto(state.masterUrl); await expect(mobile.getByRole('heading', { name: 'Create shipment' })).toBeVisible();
     await mobile.locator('#company').fill('Phone Company'); await mobile.locator('#date').fill('2026-10-09'); await mobile.getByRole('button', { name: 'Create shipment', exact: true }).click();

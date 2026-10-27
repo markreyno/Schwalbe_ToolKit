@@ -4,7 +4,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 
 ## Ports and security
 
-- Desktop HTTPS server: TCP **48731** (see [Phone HTTPS](phone-https.md))
+- Desktop phone server: TCP **48731** (HTTP by default; see [Phone transport](phone-https.md))
 - Accepts clients on RFC1918, link-local, and Tailscale ranges only
 - Public internet clients are rejected
 

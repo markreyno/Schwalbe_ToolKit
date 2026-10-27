@@ -20,6 +20,7 @@ export async function registerConnectPwa(
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) throw new Error('Untrusted request.');
     if (action === 'setTailscale') await service.setTailscaleMode(data?.enabled);
     else if (action === 'setManualAddress') await service.setManualAddress(data?.address);
+    else if (action === 'setPhoneUseHttps') await tlsManager.setPhoneUseHttps(!!data?.enabled || !!data?.usePhoneHttps);
     else if (action === 'setAllowInsecureHttp') await tlsManager.setAllowInsecureHttp(!!data?.enabled);
     else if (action !== 'status') throw new Error('Unsupported action.');
     return service.status();

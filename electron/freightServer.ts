@@ -65,7 +65,12 @@ export class FreightServer {
     if (this.phoneHandle) await this.phoneHandle.close();
     this.phoneHandle = undefined;
     this.port = 0;
-    await this.tlsManager.refreshServerTls(this.useTailscale);
+    const { hosts } = await listPhoneUrlHosts({
+      useTailscale: this.useTailscale,
+      preferredLanAddress: this.preferredAddress,
+      allowInsecureHttp: this.tlsManager.getPhoneHttpMode()
+    });
+    await this.tlsManager.refreshServerTls(this.useTailscale, hosts);
     const tls = this.tlsManager.getServerTls();
     const allowInsecure = this.tlsManager.getAllowInsecureHttp();
     if (!tls && !allowInsecure) {
@@ -227,10 +232,14 @@ export class FreightServer {
   folder(id: string) { const s = this.shipments.find(s => s.id === id); if (!s) throw new Error('Shipment not found.'); return s.folder; }
   async status() {
     const tailscale = await detectTailscale();
-    const insecure = this.tlsManager.getAllowInsecureHttp() && !this.tlsManager.getServerTls();
+    const insecure = this.tlsManager.getPhoneHttpMode();
     let urls: string[] = [];
     try {
-      const { hosts } = await listPhoneUrlHosts({ useTailscale: this.useTailscale, preferredLanAddress: this.preferredAddress });
+      const { hosts } = await listPhoneUrlHosts({
+        useTailscale: this.useTailscale,
+        preferredLanAddress: this.preferredAddress,
+        allowInsecureHttp: insecure
+      });
       urls = buildPhoneAddressList(hosts, this.port || FREIGHT_PHONE_PORT, insecure);
     } catch (e: any) {
       this.error = e.message || String(e);

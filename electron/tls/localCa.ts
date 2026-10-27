@@ -24,7 +24,7 @@ function fingerprintPem(pem: string): string {
   return hash.replace(/(.{2})/g, '$1:').replace(/:$/, '');
 }
 
-function collectSans(): string[] {
+function collectSans(extraHosts: string[] = []): string[] {
   const sans = new Set<string>(['localhost', '127.0.0.1']);
   const hostname = os.hostname();
   if (hostname) sans.add(hostname.toLowerCase());
@@ -33,7 +33,51 @@ function collectSans(): string[] {
       if (addr.family === 'IPv4' && !addr.internal) sans.add(addr.address);
     }
   }
+  for (const host of extraHosts) {
+    const trimmed = (host || '').trim().toLowerCase();
+    if (!trimmed) continue;
+    const bare = trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed.split(':')[0];
+    if (bare) sans.add(bare);
+  }
   return [...sans];
+}
+
+const MAX_LEAF_VALIDITY_DAYS = 397;
+
+function leafCertStillUsable(certPem: string): boolean {
+  try {
+    const cert = forge.pki.certificateFromPem(certPem);
+    const now = Date.now();
+    const renewBefore = 2 * 24 * 60 * 60 * 1000;
+    if (cert.validity.notAfter.getTime() - renewBefore < now) return false;
+    const lifetimeDays = (cert.validity.notAfter.getTime() - cert.validity.notBefore.getTime()) / (24 * 60 * 60 * 1000);
+    if (lifetimeDays > MAX_LEAF_VALIDITY_DAYS + 1) return false;
+    const eku = cert.getExtension('extKeyUsage') as { serverAuth?: boolean } | null;
+    if (!eku?.serverAuth) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function parseLeafCertInfo(certPem: string): { sans: string[]; notAfter: string; hasServerAuth: boolean } {
+  const cert = forge.pki.certificateFromPem(certPem);
+  const eku = cert.getExtension('extKeyUsage') as { serverAuth?: boolean } | null;
+  const alt = cert.getExtension('subjectAltName') as { altNames?: { type: number; ip?: string; value?: string }[] } | null;
+  const sans: string[] = [];
+  for (const entry of alt?.altNames || []) {
+    if (entry.type === 7 && entry.ip) sans.push(entry.ip);
+    else if (entry.type === 2 && entry.value) sans.push(entry.value.toLowerCase());
+  }
+  return { sans, notAfter: cert.validity.notAfter.toISOString(), hasServerAuth: !!eku?.serverAuth };
+}
+
+export function leafCoversHost(certPem: string, host: string): boolean {
+  const normalized = (host || '').trim().toLowerCase();
+  if (!normalized) return false;
+  const bare = normalized.startsWith('[') && normalized.endsWith(']') ? normalized.slice(1, -1) : normalized.split(':')[0];
+  const { sans } = parseLeafCertInfo(certPem);
+  return sans.some(s => s.toLowerCase() === bare);
 }
 
 async function readIfExists(file: string): Promise<string | null> {
@@ -85,7 +129,7 @@ function issueServerCert(caCertPem: string, caKeyPem: string, sans: string[]): {
   cert.serialNumber = String(Date.now());
   cert.validity.notBefore = new Date();
   cert.validity.notAfter = new Date();
-  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+  cert.validity.notAfter.setDate(cert.validity.notBefore.getDate() + MAX_LEAF_VALIDITY_DAYS);
   cert.setSubject([{ name: 'commonName', value: 'Schwalbe ToolKit Phone Server' }]);
   cert.setIssuer(caCert.subject.attributes);
   const altNames = sans.map(name => {
@@ -102,27 +146,28 @@ function issueServerCert(caCertPem: string, caKeyPem: string, sans: string[]): {
   return { certPem: forge.pki.certificateToPem(cert), keyPem: forge.pki.privateKeyToPem(keys.privateKey) };
 }
 
-export async function ensureLocalTlsMaterial(userDataDir: string, forceRegenerate = false): Promise<LocalCaMaterial> {
+export async function ensureLocalTlsMaterial(userDataDir: string, forceRegenerate = false, extraHosts: string[] = []): Promise<LocalCaMaterial> {
   const dir = path.join(userDataDir, CA_DIR);
   const { caCertPem, caKeyPem } = await ensureCaPair(dir);
-  const sans = collectSans();
+  const sans = collectSans(extraHosts);
   const sansKey = sans.sort().join(',');
   const metaPath = path.join(dir, 'server-meta.json');
-  let reuse = false;
   if (!forceRegenerate) {
     try {
       const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
       if (meta.sansKey === sansKey) {
         const certPem = await fs.readFile(path.join(dir, 'server.crt'), 'utf8');
         const keyPem = await fs.readFile(path.join(dir, 'server.key.pem'), 'utf8');
-        return {
-          caCertPem,
-          caKeyPem,
-          serverCertPem: certPem,
-          serverKeyPem: keyPem,
-          fingerprintSha256: fingerprintPem(caCertPem),
-          sans
-        };
+        if (leafCertStillUsable(certPem)) {
+          return {
+            caCertPem,
+            caKeyPem,
+            serverCertPem: certPem,
+            serverKeyPem: keyPem,
+            fingerprintSha256: fingerprintPem(caCertPem),
+            sans
+          };
+        }
       }
     } catch { /* regenerate */ }
   }
