@@ -41,6 +41,9 @@ export function ConnectPwaPage() {
     void action('setManualAddress', { address: ip });
   }
 
+  const tls = state?.phoneTls;
+  const httpMode = tls?.mode === 'http' || !tls?.phoneUseHttps;
+
   return <>
     <Link to="/" className="back-link"><ArrowLeft size={16}/> All tools</Link>
     <header className="page-heading">
@@ -56,14 +59,16 @@ export function ConnectPwaPage() {
       <div>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-phone-hub" title="Phone hub server" defaultOpen>
           <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable.'} Keep the toolkit open.</p>
-          {state?.phoneTls && !state.phoneTls.tlsReady && <p role="alert" className="freight-error">{state.phoneTls.tlsError}</p>}
+          <p className="freight-muted">Phone transport: {httpMode ? 'HTTP (default)' : tls?.usingTailscaleCert ? 'HTTPS · Tailscale certificate' : 'HTTPS · local desktop CA'}</p>
+          {tls && !httpMode && !tls.tlsReady && <p role="alert" className="freight-error">{tls.tlsError}</p>}
+          {tls && !httpMode && tls.tlsReady && tls.tlsError && <p role="alert" className="freight-error">{tls.tlsError}</p>}
           {state?.error && <p role="alert">{state.error}</p>}
-          {state?.phoneTls?.caFingerprint && !state.phoneTls.usingTailscaleCert && <>
-            <p className="freight-muted">CA fingerprint (verify on phone): <code>{state.phoneTls.caFingerprint}</code></p>
-            <p className="freight-muted">Trust URL (HTTP, CA only): <code>{state.phoneTls.caTrustHttpUrl}</code></p>
-            {state.phoneTls.caTrustQr && <img src={state.phoneTls.caTrustQr} alt="Scan to trust desktop CA on your phone" style={{ maxWidth: 220 }}/>}
+          {tls && !httpMode && tls.caFingerprint && !tls.usingTailscaleCert && <>
+            <p className="freight-muted">CA fingerprint (verify on phone): <code>{tls.caFingerprint}</code></p>
+            <p className="freight-muted">Trust URL (HTTP, CA only): <code>{tls.caTrustHttpUrl}</code></p>
+            {tls.caTrustQr && <img src={tls.caTrustQr} alt="Scan to trust desktop CA on your phone" style={{ maxWidth: 220 }}/>}
           </>}
-          <label><input type="checkbox" checked={!!state?.phoneTls?.allowInsecureHttp} disabled={busy} onChange={e => void action('setAllowInsecureHttp', { enabled: e.target.checked })}/> Allow insecure HTTP (not recommended)</label>
+          {httpMode && <p className="freight-muted">Phone tools use HTTP. PWA install, offline caching, and push notifications require HTTPS (disabled in this release). The hub and uploads work in the browser over HTTP.</p>}
         </CollapsibleSection>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-reachability" title="Reachability">
           <p className="freight-muted">Freight Pictures (48731): {state?.reachability.freight ? 'responding' : 'not responding'}</p>
@@ -91,7 +96,7 @@ export function ConnectPwaPage() {
             <option value="tailscale">Tailscale</option>
           </select>
         </label>
-        {state?.useTailscale && state.tailscale.error && <p role="alert" className="freight-error">{state.tailscale.error}. Using local network instead.</p>}
+        {state?.useTailscale && state.tailscale.error && <p role="alert" className="freight-error">{state.tailscale.error}</p>}
         {state?.useTailscale && state.tailscale.available && <p className="freight-muted">Using Tailscale: {state.tailscale.hostname || state.tailscale.address}</p>}
         {qr && <img src={qr} alt="Scan to open Connect PWA on your phone"/>}
         {!state?.useTailscale && <>
@@ -107,7 +112,10 @@ export function ConnectPwaPage() {
         </>}
         <input aria-label="Phone hub link" readOnly value={url}/>
         <button disabled={!url} onClick={() => { void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(e => setError(String(e))); }}>{copied ? 'Link copied' : 'Copy link'}</button>
-        <p className="freight-muted">Hub links use HTTPS on port {state?.port}. On local Wi‑Fi, trust the desktop CA once (see Phone hub server). The QR code opens the <strong>install</strong> page (<code>/install</code>); the warehouse hub itself stays free of install prompts.</p>
+        <p className="freight-muted">
+          Hub links use {httpMode ? 'HTTP' : 'HTTPS'} on port {state?.port}.
+          The QR opens the <strong>install</strong> page (<code>/install</code>); the warehouse hub stays free of install prompts.
+        </p>
       </section>
     </div>
   </>;

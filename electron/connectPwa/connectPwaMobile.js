@@ -76,6 +76,10 @@ async function maybeBindPushButton() {
   if (!button || !status) return;
   if (!window.isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window)) {
     button.hidden = true;
+    if (!window.isSecureContext && status) {
+      status.hidden = false;
+      status.textContent = 'Push alerts need HTTPS. Turn on “Use HTTPS for phone tools” on the desktop Connect PWA page, or use the hub in the browser without push.';
+    }
     return;
   }
   const reg = await navigator.serviceWorker.ready.catch(() => null);

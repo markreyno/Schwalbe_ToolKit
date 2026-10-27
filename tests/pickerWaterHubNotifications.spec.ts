@@ -9,7 +9,7 @@ import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
 
 const artifactDir = path.resolve('/opt/cursor/artifacts/screenshots', 'picker-water-hub');
 const agent = new https.Agent({ rejectUnauthorized: false });
-const baseUrl = `https://127.0.0.1:${CONNECT_PWA_PORT}`;
+const baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
 
 test.describe('Picker water hub notifications (installed PWA only)', () => {
   let server: ConnectPwaServer;

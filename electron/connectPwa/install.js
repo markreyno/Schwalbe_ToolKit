@@ -59,6 +59,8 @@ function showInstallPanel() {
   document.getElementById('android-install').hidden = ios;
   document.getElementById('generic-install').hidden = ios;
   if (!ios) document.getElementById('generic-install').hidden = false;
+  const httpNote = document.getElementById('http-install-note');
+  if (httpNote) httpNote.hidden = window.isSecureContext;
 }
 
 let deferredPrompt = null;

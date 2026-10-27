@@ -104,7 +104,12 @@ export class PalletVisionServer {
     if (this.phoneHandle) await this.phoneHandle.close();
     this.phoneHandle = undefined;
     this.port = 0;
-    await this.tlsManager.refreshServerTls(this.useTailscale);
+    const { hosts } = await listPhoneUrlHosts({
+      useTailscale: this.useTailscale,
+      preferredLanAddress: this.preferredAddress,
+      allowInsecureHttp: this.tlsManager.getPhoneHttpMode()
+    });
+    await this.tlsManager.refreshServerTls(this.useTailscale, hosts);
     const tls = this.tlsManager.getServerTls();
     const allowInsecure = this.tlsManager.getAllowInsecureHttp();
     if (!tls && !allowInsecure) {
@@ -404,10 +409,14 @@ export class PalletVisionServer {
 
   async status() {
     const tailscale = await detectTailscale();
-    const insecure = this.tlsManager.getAllowInsecureHttp() && !this.tlsManager.getServerTls();
+    const insecure = this.tlsManager.getPhoneHttpMode();
     let urls: string[] = [];
     try {
-      const { hosts } = await listPhoneUrlHosts({ useTailscale: this.useTailscale, preferredLanAddress: this.preferredAddress });
+      const { hosts } = await listPhoneUrlHosts({
+        useTailscale: this.useTailscale,
+        preferredLanAddress: this.preferredAddress,
+        allowInsecureHttp: insecure
+      });
       urls = buildPhoneAddressList(hosts, this.port || PALLETVISION_PHONE_PORT, insecure);
     } catch (e: any) {
       this.error = e.message || String(e);

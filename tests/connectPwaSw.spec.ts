@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import https from 'node:https';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConnectPwaServer, CONNECT_PWA_PORT } from '../electron/connectPwaServer';
@@ -13,11 +12,8 @@ const pkg = JSON.parse(readFileSync(path.join(process.cwd(), 'package.json'), 'u
 test.describe('Connect PWA service worker', () => {
   let server: ConnectPwaServer;
   let testRoot: string;
-  const baseUrl = `https://127.0.0.1:${CONNECT_PWA_PORT}`;
-  const agent = new https.Agent({ rejectUnauthorized: false });
-
+  const baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
   test.beforeAll(async () => {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     testRoot = path.resolve('.cache/connect-pwa-sw-test', randomUUID());
     const tls = await createTestPhoneTlsManager(testRoot);
     server = new ConnectPwaServer(path.join(testRoot, 'settings.json'), tls, async () => []);
@@ -30,7 +26,7 @@ test.describe('Connect PWA service worker', () => {
   });
 
   test('served sw.js versions cache name with package.json', async () => {
-    const sw = await fetch(`${baseUrl}/sw.js`, { agent } as RequestInit).then(r => r.text());
+    const sw = await fetch(`${baseUrl}/sw.js`).then(r => r.text());
     expect(sw).toContain(`CACHE_VERSION = '${pkg.version}'`);
     expect(sw).toContain(`schwalbe-toolkit-connect-\${CACHE_VERSION}`);
     expect(sw).not.toContain('schwalbe-toolkit-connect-v1');
@@ -40,7 +36,7 @@ test.describe('Connect PWA service worker', () => {
   });
 
   test('hub HTML uses network-first path and has no install section', async () => {
-    const html = await fetch(`${baseUrl}/`, { agent } as RequestInit).then(r => r.text());
+    const html = await fetch(`${baseUrl}/`).then(r => r.text());
     expect(html).not.toContain('Add to Home Screen');
     expect(html).not.toContain('install-banner');
     expect(html).toContain('/pwaInstallUi.js');

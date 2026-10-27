@@ -1,45 +1,43 @@
-# Phone HTTPS (all tools)
+# Phone transport (HTTP default, optional HTTPS)
 
-Freight Pictures (**48731**), PalletVision Data Collector (**48732**), and Connect PWA (**48734**) serve **HTTPS only** on those ports. QR codes, Connect PWA tiles, and copyable links always use `https://`.
+Freight Pictures (**48731**), PalletVision Data Collector (**48732**), and Connect PWA (**48734**) use **plain HTTP by default** on those ports. QR codes, hub tiles, and copyable links use `http://` unless you turn on **Use HTTPS for phone tools** on the desktop Connect PWA page (or the equivalent setting stored in phone TLS settings).
 
-## One-time phone setup
+## Default: HTTP
+
+- No certificate trust step on phones.
+- Uploads and the Connect PWA hub work in the mobile browser.
+- **Does not** provide a secure context: service worker install/offline caching, “Install app” prompts, and Picker Water **push** notifications are unavailable until HTTPS is enabled and trusted.
+
+## Optional HTTPS
+
+When **Use HTTPS for phone tools** is enabled on the desktop:
 
 ### Local network mode
 
-1. On the desktop, open any phone tool page and note the **CA fingerprint** and **Trust this desktop** QR (plain HTTP on port **48730** — CA download only).
-2. On the phone, scan the trust QR or open `http://<desktop-ip>:48730/` on the same LAN.
-3. Install the CA:
-   - **iPhone:** download the `.mobileconfig` profile, install it, then **Settings → General → About → Certificate Trust Settings** → enable full trust for the Schwalbe ToolKit CA. Confirm the fingerprint matches the desktop.
-   - **Android:** download `ca.crt`, then **Settings → Security → Install certificate** (or Encryption & credentials). Confirm the fingerprint matches.
-4. Open the tool `https://` link or Connect PWA hub. Re-scan QR codes if an old home-screen icon still points at `http://` (tool ports serve HTTPS only).
-
-The desktop creates a **per-install local root CA** in user data; the private key never leaves the PC. Server certificates include SANs for current LAN IPs and the PC hostname, and are regenerated when addresses change.
+1. Note the **CA fingerprint** and **Trust this desktop** link (plain HTTP on port **48730** — CA download only).
+2. On the phone, open `http://<desktop-ip>:48730/` on the same LAN and install the CA (iOS profile + full trust, or Android `ca.crt`).
+3. Open tool `https://` links or the Connect PWA hub.
 
 ### Tailscale mode
 
-1. Install Tailscale on PC and phone (same tailnet). Enable **MagicDNS**.
-2. On the desktop, switch the tool to **Tailscale** network mode.
-3. The toolkit runs `tailscale cert <magicdns-name>` for a publicly trusted certificate. Phone links use the **MagicDNS hostname** (not the Tailscale IP — the cert will not match an IP).
-4. No local CA install is required on the phone.
+1. Enable **MagicDNS** and **HTTPS Certificates** in the Tailscale admin console (DNS settings).
+2. Switch the tool to **Tailscale** network mode on the desktop.
+3. The toolkit runs `tailscale cert <magicdns-name>`. Phone links should use the **MagicDNS hostname** (not a raw 100.x IP).
 
-Certificates are renewed automatically before expiry when possible.
+Certificates are renewed automatically before expiry when possible. On Windows, the packaged app looks for `tailscale.exe` on PATH and under `C:\Program Files\Tailscale\tailscale.exe`.
 
 ## Troubleshooting
 
 | Issue | What to do |
 |--------|------------|
-| Desktop shows “HTTPS certificate is not ready” | Fix Tailscale/MagicDNS or local CA errors shown on the page. Do not use HTTP unless you explicitly enable the insecure toggle (not recommended). |
-| Phone warns about certificate | Local mode: complete CA trust steps and verify fingerprint. Tailscale: open the MagicDNS URL, not the 100.x IP. |
-| Old home-screen icon uses HTTP | Remove the old icon and scan the new `https://` QR. Tool ports redirect HTTP→HTTPS when TLS is enabled. |
-| Connect PWA offline/install | Requires HTTPS (secure context). After trusting the CA (local) or using Tailscale HTTPS, service worker registration works. |
+| Uploads fail / connection refused | Confirm Windows Firewall allows ports **48731–48734** on private networks; same Wi‑Fi or Tailscale. |
+| Want installable PWA or push | Enable **Use HTTPS for phone tools** and complete certificate trust (local CA or Tailscale). |
+| Desktop shows “HTTPS certificate is not ready” | Fix Tailscale/MagicDNS/`tailscale cert` or local CA errors, or turn HTTPS off to stay on HTTP. |
+| Phone TLS error on `*.ts.net` while HTTPS is on | Usually wrong cert (local CA) or expired Tailscale cert — check Connect PWA certificate status on the desktop. |
 
 ## Adding a new phone tool
 
 1. Import `PhoneTlsManager` and `startPhoneToolServer` from `electron/tls`.
-2. Listen on your fixed port with the shared manager’s TLS material (same pattern as Freight/PalletVision/Connect PWA).
-3. Build all phone URLs with `buildPhoneOrigin` / `buildPhoneAddressList` from `electron/tls/phoneUrls.ts` so QRs and APIs stay on HTTPS.
-4. Keep the private-network IP allowlist on the request handler; apply `applyPhoneSecurityHeaders` via the shared server wrapper.
-
-## Insecure HTTP (troubleshooting only)
-
-An **Allow insecure HTTP (not recommended)** toggle on the desktop disables TLS requirement and serves plain HTTP on tool ports. Default is **off**. Use only for short-term diagnosis.
+2. Listen on your fixed port; pass `tls` from the manager when HTTPS is enabled, otherwise HTTP via `allowInsecureHttp` / HTTP mode.
+3. Build URLs with `buildPhoneOrigin` / `buildPhoneAddressList` and respect `PhoneTlsManager.getPhoneHttpMode()`.
+4. Keep the private-network IP allowlist on the request handler.

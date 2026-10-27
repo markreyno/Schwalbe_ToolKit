@@ -37,7 +37,7 @@ test('palletvision upload creates folders, stores metadata, extracts frames', as
     expect(state.running).toBe(true);
     expect(state.pallets).toHaveLength(0);
 
-    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48732');
+    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48732');
     const apiUrl = (path: string) => new URL(path, local(state.qrUrl)).toString();
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair') && r.request().method() === 'POST');
@@ -191,7 +191,7 @@ test('palletvision mobile upload existing video', async ({ browser }) => {
     await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
 
     let state = await page.evaluate(() => window.toolkit.palletvision('status'));
-    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48732');
+    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48732');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const pairReq = mobile.waitForResponse(r => r.url().includes('/api/pair') && r.request().method() === 'POST');
     await mobile.goto(local(state.qrUrl));
@@ -257,7 +257,7 @@ test('palletvision mobile cancel upload cleans up and allows retry', async ({ br
 
     let state = await page.evaluate(() => window.toolkit.palletvision('status'));
     const palletsBefore = state.pallets.length;
-    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48732');
+    const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48732');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
     let slowUpload = true;
     await mobile.route('**/api/pallets/upload', async (route) => {

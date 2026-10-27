@@ -15,7 +15,7 @@ Picker watering alerts on the phone hub are shown **only in the installed Connec
 
 When the installed hub is open:
 
-- A **Picker watering** panel lists due/overdue pickers synced from the desktop (HTTPS to the desktop on your LAN or Tailscale).
+- A **Picker watering** panel lists due/overdue pickers synced from the desktop when the hub is opened as an **installed PWA over HTTPS**. In the browser over HTTP, watering alerts still list in the hub when installed; push requires HTTPS.
 - **Enable push alerts** appears only in the installed app after you tap it (required for permission on iOS). Subscriptions are stored on the desktop.
 
 ### Push support by platform

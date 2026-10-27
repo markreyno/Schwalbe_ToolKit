@@ -68,7 +68,7 @@ app.whenReady().then(async () => {
   await registerConnectPwa(() => mainWindow, tlsManager, {
     toolsForHost: async host => {
       const [freightStatus, palletvisionStatus] = await Promise.all([freight.status(), palletvision.status()]);
-      const insecure = tlsManager.getAllowInsecureHttp() && !tlsManager.getServerTls();
+      const insecure = tlsManager.getPhoneHttpMode();
       return resolveConnectPwaTools(host, freightStatus, palletvisionStatus, insecure);
     }
   }, pickerWaterBridge);

@@ -4,7 +4,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 
 ## Ports and security
 
-- Desktop HTTPS server: TCP **48731** (see [Phone HTTPS](phone-https.md))
+- Desktop phone server: TCP **48731** (HTTP by default; see [Phone transport](phone-https.md))
 - Accepts clients on RFC1918, link-local, and Tailscale ranges only
 - Public internet clients are rejected
 
@@ -46,7 +46,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 - Allow the toolkit on **Windows Firewall** (private network).
 - Guest Wi‑Fi that blocks device-to-device traffic will fail; use LAN or Tailscale.
 - Cross-subnet/VLAN works when routing allows private traffic between subnets.
-- If QR fails, copy/paste the link or type `https://<desktop-host>:48731/` manually.
+- If QR fails, copy/paste the link or type `http://<desktop-host>:48731/` manually.
 
 ## Tailscale
 

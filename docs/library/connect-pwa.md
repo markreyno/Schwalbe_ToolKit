@@ -5,10 +5,10 @@
 ## What it does
 
 - Desktop page shows a QR code and copyable link to the phone hub
-- Phone hub is an installable Progressive Web App (manifest + service worker)
+- Optional installable Progressive Web App (manifest + service worker) when **HTTPS** is enabled
 - Status indicator shows whether desktop tool servers are reachable from the hub
 - Tracks recently connected phones (IP, user agent, last seen)
-- Optional **Tailscale HTTPS** via `tailscale cert` (non-blocking; see limitations below)
+- **Tailscale** or **local network** modes (HTTP by default on port **48734**)
 
 ## Step-by-step (desktop)
 
@@ -21,10 +21,8 @@
 ## Step-by-step (phone)
 
 1. Scan the desktop **Connect PWA** QR code or open the link. It goes to **`/install`** (not the hub directly).
-2. Follow the install page:
-   - **Android (Chrome):** use **Install app** when offered, or the browser install prompt.
-   - **iPhone (Safari):** **Share → Add to Home Screen**, then open **Schwalbe ToolKit** from the home screen icon.
-3. Open the installed app (or continue in the browser via the link on the install page).
+2. **HTTP (default):** use **Continue in browser without installing** on the install page, or open the hub URL directly. Uploads and tool tiles work without certificates.
+3. **HTTPS (optional):** after enabling HTTPS on the desktop and trusting the certificate, follow the install page (Android install prompt or iOS **Add to Home Screen**).
 4. On the **warehouse hub** (`/`), confirm the status line when possible and tap a tool tile for **Freight Pictures** or **PalletVision**.
 5. Use the **Home** arrow (top-left) on tool pages to return to the hub.
 
@@ -32,11 +30,11 @@ The hub (`/`) never shows install prompts. Install instructions live only on **`
 
 ### iOS limitation
 
-Safari opens scanned HTTPS links in the **browser**, not inside an installed web app. After install, workers should open **Schwalbe ToolKit from the home screen**; the install page shows this when it detects a prior install. Scanning the QR again in Safari will not switch to the installed app.
+Safari opens scanned links in the **browser**, not inside an installed web app. After install (HTTPS), workers should open **Schwalbe ToolKit from the home screen**.
 
 ### Android link capturing
 
-The web app manifest sets `handle_links: preferred` and `launch_handler.client_mode: navigate-existing` so HTTPS links in scope (including `/install`) can open the installed PWA when Chrome supports link capturing.
+When HTTPS is enabled, the manifest can open in-scope links in the installed PWA where Chrome supports link capturing.
 
 ## Network modes
 
@@ -44,38 +42,31 @@ The web app manifest sets `handle_links: preferred` and `launch_handler.client_m
 
 - Hub URL uses your LAN IPv4 addresses (10.x, 172.16–31.x, 192.168.x).
 - Allow Schwalbe ToolKit through **Windows Firewall** on private networks.
-- No router port forwarding is required.
 
 ### Tailscale
 
 1. Install Tailscale on PC and phone and sign in to the same tailnet.
 2. Switch network mode to **Tailscale** on the desktop Connect PWA page.
-3. QR/link use your MagicDNS name or Tailscale IP (100.64.0.0/10).
-4. Optionally, the desktop may obtain a TLS certificate with `tailscale cert` for HTTPS on port **48735** (see desktop page when available).
+3. QR/link use your MagicDNS name (or Tailscale IP in HTTP mode).
 
-## HTTPS (required)
+## HTTP vs HTTPS
 
-All hub and tool links use **HTTPS on port 48734** (same port as before; the old separate Tailscale port **48735** is removed). See [Phone HTTPS](phone-https.md) for trusting the desktop CA (local network) or Tailscale MagicDNS setup.
+| | HTTP (default) | HTTPS (optional) |
+|--|----------------|------------------|
+| Uploads / hub in browser | Yes | Yes (after trust) |
+| PWA install / offline (service worker) | No | Yes |
+| Picker Water push in installed PWA | No | Yes |
 
-With HTTPS, Connect PWA gets a **secure context**: the service worker and browser-driven install work after the phone trusts the certificate (local) or uses Tailscale’s public cert.
+See [Phone transport](phone-https.md) for certificate setup when HTTPS is enabled.
 
 ## Troubleshooting
 
 **Phone cannot open the hub**
 
-- Same Wi‑Fi or routed private network as the PC, or use Tailscale.
+- Same Wi‑Fi or Tailscale as the PC.
 - Try manual IP fallback with the PC’s correct LAN address.
 - Check Windows Firewall for ports **48734**, **48731**, and **48732**.
 
 **Status shows tools not responding**
 
-- Open **Freight Pictures** or **PalletVision** on the desktop once so their servers start.
-- Keep the toolkit running; closing it stops all upload servers.
-
-**Freight asks for a key**
-
-- Open the hub tile for Freight, or use the **master link** from the Freight Pictures desktop page if you need a specific shipment.
-
-**Public IP rejected**
-
-- All three servers only accept clients from private ranges (RFC1918, 169.254.x.x, Tailscale 100.64.0.0/10 and fd7a:115c:a1e0::/48). Public IPs receive HTTP 403.
+- Open Freight Pictures and PalletVision on the desktop and ensure each tool’s phone server is running (storage folder chosen where required).

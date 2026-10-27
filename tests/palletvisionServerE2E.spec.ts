@@ -52,7 +52,7 @@ test.describe('PalletVision Server E2E', () => {
     const status = await server.status();
     expect(status.running).toBe(true);
     expect(status.port).toBe(48732);
-    baseUrl = 'https://127.0.0.1:48732';
+    baseUrl = 'http://127.0.0.1:48732';
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
     const pairResp = await fetch(`${baseUrl}/api/pair`, { method: 'POST' });
