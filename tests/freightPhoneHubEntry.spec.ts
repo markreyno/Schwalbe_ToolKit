@@ -15,14 +15,14 @@ test.describe('Freight phone hub entry', () => {
       {
         root: '/data',
         running: true,
-        addresses: ['http://desk.tailbbbe79.ts.net:48731'],
-        masterUrl: 'http://desk.tailbbbe79.ts.net:48731/?key=master',
-        shipments: [{ closed: false, url: 'http://desk.tailbbbe79.ts.net:48731/?key=old-shipment' }]
+        addresses: ['https://desk.tailbbbe79.ts.net:48731'],
+        masterUrl: 'https://desk.tailbbbe79.ts.net:48731/?key=master',
+        shipments: [{ closed: false, url: 'https://desk.tailbbbe79.ts.net:48731/?key=old-shipment' }]
       },
-      { root: '/pv', running: true, addresses: ['http://desk.tailbbbe79.ts.net:48732'], qrUrl: 'http://desk.tailbbbe79.ts.net:48732/' },
-      true
+      { root: '/pv', running: true, addresses: ['https://desk.tailbbbe79.ts.net:48732'], qrUrl: 'https://desk.tailbbbe79.ts.net:48732/' },
+      false
     );
-    expect(tools[0].url).toBe('http://desk.tailbbbe79.ts.net:48731/');
+    expect(tools[0].url).toBe('https://desk.tailbbbe79.ts.net:48731/');
   });
 
   test('bare origin opens New shipment; QR key opens active shipment', async ({ browser }) => {
@@ -37,9 +37,9 @@ test.describe('Freight phone hub entry', () => {
     await server.create('Bti nm', '2026-10-16');
     const status = await server.status();
     const shipment = status.shipments[0];
-    const base = `http://127.0.0.1:${FREIGHT_PHONE_PORT}`;
+    const base = `https://127.0.0.1:${FREIGHT_PHONE_PORT}`;
 
-    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await mobile.goto(`${base}/`);
     await expect(mobile.locator('#shipment-setup')).toBeVisible();
     await expect(mobile.getByRole('heading', { name: 'New shipment' })).toBeVisible();

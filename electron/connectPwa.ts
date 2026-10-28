@@ -22,6 +22,7 @@ export async function registerConnectPwa(
     else if (action === 'setManualAddress') await service.setManualAddress(data?.address);
     else if (action === 'setPhoneUseHttps') await tlsManager.setPhoneUseHttps(!!data?.enabled || !!data?.usePhoneHttps);
     else if (action === 'setAllowInsecureHttp') await tlsManager.setAllowInsecureHttp(!!data?.enabled);
+    else if (action === 'retryPhoneCertificate') await tlsManager.retryCertificate();
     else if (action !== 'status') throw new Error('Unsupported action.');
     return service.status();
   });

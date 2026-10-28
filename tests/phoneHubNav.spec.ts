@@ -15,11 +15,12 @@ test.describe('Phone hub home navigation', () => {
     const server = new ConnectPwaServer(path.join(root, 'settings.json'), tls, async () => []);
     await server.start();
     try {
-      const html = await fetch(`http://127.0.0.1:${CONNECT_PWA_PORT}/`, { agent: new (await import('node:https')).Agent({ rejectUnauthorized: false }) } as RequestInit).then(r => r.text());
+      const agent = new (await import('node:https')).Agent({ rejectUnauthorized: false });
+      const html = await fetch(`https://127.0.0.1:${CONNECT_PWA_PORT}/`, { agent } as RequestInit).then(r => r.text());
       expect(html).not.toContain('Add to Home Screen');
       expect(html).not.toContain('install-banner');
       expect(html).toContain('/manifest.webmanifest');
-      const sw = await fetch(`http://127.0.0.1:${CONNECT_PWA_PORT}/sw.js`, { agent: new (await import('node:https')).Agent({ rejectUnauthorized: false }) } as RequestInit);
+      const sw = await fetch(`https://127.0.0.1:${CONNECT_PWA_PORT}/sw.js`, { agent } as RequestInit);
       expect(sw.ok).toBe(true);
     } finally {
       server.stop();
@@ -52,11 +53,11 @@ test.describe('Phone hub home navigation', () => {
       const state = await page.evaluate(() => window.toolkit.freight('status'));
       const shipment = state.shipments.find(s => s.company === 'Home Nav Co')!;
       const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
-      await mobile.goto(shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731'));
+      await mobile.goto(shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731'));
       await mobile.waitForSelector('.phone-home-link', { timeout: 15000 });
       const home = mobile.getByRole('link', { name: 'Home', exact: true });
       await expect(home).toBeVisible();
-      await expect(home).toHaveAttribute('href', `http://127.0.0.1:${CONNECT_PWA_PORT}/`);
+      await expect(home).toHaveAttribute('href', `https://127.0.0.1:${CONNECT_PWA_PORT}/`);
       await mobile.close();
     } finally {
       await app.close();

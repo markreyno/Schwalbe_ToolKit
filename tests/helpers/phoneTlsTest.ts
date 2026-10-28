@@ -5,12 +5,12 @@ import { ensureLocalTlsMaterial } from '../../electron/tls/localCa';
 export async function createTestPhoneTlsManager(testRoot: string, options?: { usePhoneHttps?: boolean }): Promise<PhoneTlsManager> {
   const manager = new PhoneTlsManager(testRoot);
   await manager.load();
-  if (options?.usePhoneHttps) {
+  if (options?.usePhoneHttps === false) {
+    await manager.setPhoneUseHttps(false);
+  } else {
     await ensureLocalTlsMaterial(testRoot);
     await manager.setPhoneUseHttps(true);
-    await manager.refreshServerTls(false);
-  } else {
-    await manager.refreshServerTls(false);
+    await manager.refreshServerTls(false, ['127.0.0.1']);
   }
   return manager;
 }

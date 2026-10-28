@@ -1,9 +1,9 @@
 export type CounterSession = { sessionId: string; value: number };
 export type Operation = 'counter.open' | 'counter.increment' | 'counter.close' | 'pallet.prepare' | 'pallet.preview' | 'pallet.alignment';
 export interface ToolkitAPI {
-  freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open' | 'setTailscale' | 'setAllowInsecureHttp' | 'setSubfolder', data?: { company?: string; date?: string; id?: string; enabled?: boolean; subfolder?: string }): Promise<FreightState>;
-  palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale' | 'setAllowInsecureHttp' | 'update' | 'import' | 'selectVideo', data?: { id?: string; enabled?: boolean; videoPath?: string; heightInches?: number; widthInches?: number; lengthInches?: number; notes?: string; referenceId?: string; updates?: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean } }): Promise<PalletVisionState & { videoPath?: string | null }>;
-  connectPwa(action: 'status' | 'setTailscale' | 'setManualAddress' | 'setPhoneUseHttps' | 'setAllowInsecureHttp', data?: { enabled?: boolean; address?: string; usePhoneHttps?: boolean }): Promise<ConnectPwaState>;
+  freight(action: 'status' | 'choose' | 'create' | 'reupload' | 'open' | 'setTailscale' | 'setAllowInsecureHttp' | 'retryPhoneCertificate' | 'setSubfolder', data?: { company?: string; date?: string; id?: string; enabled?: boolean; subfolder?: string }): Promise<FreightState>;
+  palletvision(action: 'status' | 'choose' | 'open' | 'setTailscale' | 'setAllowInsecureHttp' | 'retryPhoneCertificate' | 'update' | 'import' | 'selectVideo', data?: { id?: string; enabled?: boolean; videoPath?: string; heightInches?: number; widthInches?: number; lengthInches?: number; notes?: string; referenceId?: string; updates?: { heightInches?: number; widthInches?: number; lengthInches?: number; device?: string; notes?: string; annotationsReviewed?: boolean } }): Promise<PalletVisionState & { videoPath?: string | null }>;
+  connectPwa(action: 'status' | 'setTailscale' | 'setManualAddress' | 'setPhoneUseHttps' | 'setAllowInsecureHttp' | 'retryPhoneCertificate', data?: { enabled?: boolean; address?: string; usePhoneHttps?: boolean }): Promise<ConnectPwaState>;
   pickerWater(action: 'sync', data?: { pickers?: { id: string; name: string; intervalDays: number; lastWatered: string; wateringLog?: string[] }[] }): Promise<{ ok: boolean }>;
   updates(action: 'status' | 'check' | 'download' | 'install'): Promise<UpdateState>;
   onUpdateState(callback: (state: UpdateState) => void): () => void;
@@ -32,17 +32,22 @@ export type PalletPreview = { company: string; labels: string[]; labelCount: num
 export type PhoneTlsState = {
   tlsReady: boolean;
   tlsError: string;
+  tlsFixHint: string;
+  transport: string;
   /** @deprecated Use phoneUseHttps */
   allowInsecureHttp: boolean;
   phoneUseHttps: boolean;
-  mode: 'tailscale' | 'insecure' | 'local' | 'http' | 'pending';
+  httpFallback: boolean;
+  mode: 'tailscale' | 'insecure' | 'local' | 'http' | 'http-fallback' | 'pending';
   caFingerprint: string;
   caTrustHttpUrl: string;
   caTrustQr: string;
   usingTailscaleCert: boolean;
   tlsHostname: string;
+  tailscaleCertHostname: string;
   leafSans: string[];
   leafExpiresAt: string;
+  tailscaleCertExpiresAt: string;
   sanCoversHostname: boolean;
   requiresCaTrust: boolean;
   installHttpsUrl: string;
