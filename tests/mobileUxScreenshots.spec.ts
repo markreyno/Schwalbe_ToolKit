@@ -35,9 +35,10 @@ test('capture mobile UX screenshots for changed phone screens', async ({ browser
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 3,
     isMobile: true,
-    hasTouch: true
+    hasTouch: true,
+    ignoreHTTPSErrors: true
   });
-  await hubPage.goto(`http://127.0.0.1:${CONNECT_PWA_PORT}/`);
+  await hubPage.goto(`https://127.0.0.1:${CONNECT_PWA_PORT}/`);
   await hubPage.getByRole('heading', { name: 'Warehouse tools', level: 1 }).waitFor();
   await hubPage.screenshot({ path: path.join(outDir, 'connect-pwa-hub.png'), fullPage: true });
   await hubPage.close();

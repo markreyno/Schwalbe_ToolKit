@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import http from 'node:http';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
+import { hubBaseUrl, hubFetch } from './helpers/hubHttps';
 
 test.describe('Connect PWA server', () => {
   let server: ConnectPwaServer;
@@ -19,14 +20,14 @@ test.describe('Connect PWA server', () => {
         title: 'Freight Pictures',
         category: 'SHIPPING & WAREHOUSE',
         ready: true,
-        url: `http://${host}:48731/`
+        url: `https://${host}:48731/`
       },
       {
         id: 'palletvision-collector' as const,
         title: 'PalletVision Data Collector',
         category: 'DATA COLLECTION',
         ready: true,
-        url: `http://${host}:48732/`
+        url: `https://${host}:48732/`
       }
     ];
   };
@@ -41,8 +42,9 @@ test.describe('Connect PWA server', () => {
     const status = await server.status();
     expect(status.running).toBe(true);
     expect(status.port).toBe(CONNECT_PWA_PORT);
-    expect(status.qrUrl.startsWith('http://')).toBe(true);
-    baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
+    if (status.phoneTls.requiresCaTrust) expect(status.qrUrl.startsWith('http://')).toBe(true);
+    else expect(status.qrUrl.startsWith('https://')).toBe(true);
+    baseUrl = hubBaseUrl(CONNECT_PWA_PORT);
   });
 
   test.afterAll(async () => {
@@ -51,7 +53,7 @@ test.describe('Connect PWA server', () => {
   });
 
   test('serves manifest, service worker, and hub page', async () => {
-    const hub = await fetch(`${baseUrl}/`);
+    const hub = await hubFetch(`${baseUrl}/`);
     expect(hub.ok).toBe(true);
     expect(hub.headers.get('content-type')).toContain('text/html');
     const html = await hub.text();
@@ -60,21 +62,21 @@ test.describe('Connect PWA server', () => {
     expect(html).not.toContain('Add to Home Screen');
     expect(html).not.toContain('install-banner');
 
-    const css = await fetch(`${baseUrl}/hub.css`);
+    const css = await hubFetch(`${baseUrl}/hub.css`);
     expect(css.ok).toBe(true);
     expect(await css.text()).toContain('--brand-blue');
 
-    const manifest = await fetch(`${baseUrl}/manifest.webmanifest`);
+    const manifest = await hubFetch(`${baseUrl}/manifest.webmanifest`);
     expect(manifest.ok).toBe(true);
     const manifestJson = await manifest.json();
     expect(manifestJson.name).toBe('Schwalbe ToolKit');
     expect(manifestJson.display).toBe('standalone');
     expect(manifestJson.theme_color).toBe('#f5f8fa');
 
-    const touch = await fetch(`${baseUrl}/apple-touch-icon.png`);
+    const touch = await hubFetch(`${baseUrl}/apple-touch-icon.png`);
     expect(touch.ok).toBe(true);
 
-    const sw = await fetch(`${baseUrl}/sw.js`);
+    const sw = await hubFetch(`${baseUrl}/sw.js`);
     expect(sw.ok).toBe(true);
     expect(await sw.text()).toContain('schwalbe-toolkit-connect');
   });
@@ -95,24 +97,24 @@ test.describe('Connect PWA server', () => {
   });
 
   test('tools API resolves LAN host URLs with shipment key', async () => {
-    const resp = await fetch(`${baseUrl}/api/tools?host=192.168.77.3`);
+    const resp = await hubFetch(`${baseUrl}/api/tools?host=192.168.77.3`);
     expect(resp.ok).toBe(true);
     const data = await resp.json();
     expect(data.host).toBe('192.168.77.3');
-    expect(data.tools[0].url).toBe('http://192.168.77.3:48731/');
-    expect(data.tools[1].url).toBe('http://192.168.77.3:48732/');
+    expect(data.tools[0].url).toBe('https://192.168.77.3:48731/');
+    expect(data.tools[1].url).toBe('https://192.168.77.3:48732/');
   });
 
   test('tools API resolves Tailscale MagicDNS host URLs', async () => {
-    const resp = await fetch(`${baseUrl}/api/tools?host=desk.tailnet.ts.net`);
+    const resp = await hubFetch(`${baseUrl}/api/tools?host=desk.tailnet.ts.net`);
     expect(resp.ok).toBe(true);
     const data = await resp.json();
-    expect(data.tools[0].url).toBe('http://desk.tailnet.ts.net:48731/');
-    expect(data.tools[1].url).toBe('http://desk.tailnet.ts.net:48732/');
+    expect(data.tools[0].url).toBe('https://desk.tailnet.ts.net:48731/');
+    expect(data.tools[1].url).toBe('https://desk.tailnet.ts.net:48732/');
   });
 
   test('status API reports reachability flags', async () => {
-    const resp = await fetch(`${baseUrl}/api/status`);
+    const resp = await hubFetch(`${baseUrl}/api/status`);
     expect(resp.ok).toBe(true);
     const data = await resp.json();
     expect(data).toHaveProperty('desktopReachable');

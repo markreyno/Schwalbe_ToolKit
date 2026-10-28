@@ -4,15 +4,17 @@ import path from 'node:path';
 import { ConnectPwaServer, CONNECT_PWA_PORT } from '../electron/connectPwaServer';
 import { connectPwaCacheName } from '../electron/connectPwa/pwaCache';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
+import { hubBaseUrl, hubFetch } from './helpers/hubHttps';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
 const pkg = JSON.parse(readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as { version: string };
 
 test.describe('Connect PWA service worker', () => {
+  test.use({ ignoreHTTPSErrors: true });
   let server: ConnectPwaServer;
   let testRoot: string;
-  const baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
+  const baseUrl = hubBaseUrl(CONNECT_PWA_PORT);
   test.beforeAll(async () => {
     testRoot = path.resolve('.cache/connect-pwa-sw-test', randomUUID());
     const tls = await createTestPhoneTlsManager(testRoot);
@@ -26,7 +28,7 @@ test.describe('Connect PWA service worker', () => {
   });
 
   test('served sw.js versions cache name with package.json', async () => {
-    const sw = await fetch(`${baseUrl}/sw.js`).then(r => r.text());
+    const sw = await hubFetch(`${baseUrl}/sw.js`).then(r => r.text());
     expect(sw).toContain(`CACHE_VERSION = '${pkg.version}'`);
     expect(sw).toContain(`schwalbe-toolkit-connect-\${CACHE_VERSION}`);
     expect(sw).not.toContain('schwalbe-toolkit-connect-v1');
@@ -36,7 +38,7 @@ test.describe('Connect PWA service worker', () => {
   });
 
   test('hub HTML uses network-first path and has no install section', async () => {
-    const html = await fetch(`${baseUrl}/`).then(r => r.text());
+    const html = await hubFetch(`${baseUrl}/`).then(r => r.text());
     expect(html).not.toContain('Add to Home Screen');
     expect(html).not.toContain('install-banner');
     expect(html).toContain('/pwaInstallUi.js');

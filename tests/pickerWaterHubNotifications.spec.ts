@@ -4,14 +4,14 @@ import { PickerWaterBridge } from '../electron/pickerWaterBridge';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdir, copyFile } from 'node:fs/promises';
-import https from 'node:https';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
+import { hubBaseUrl, hubFetch } from './helpers/hubHttps';
 
 const artifactDir = path.resolve('/opt/cursor/artifacts/screenshots', 'picker-water-hub');
-const agent = new https.Agent({ rejectUnauthorized: false });
-const baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
+const baseUrl = hubBaseUrl(CONNECT_PWA_PORT);
 
 test.describe('Picker water hub notifications (installed PWA only)', () => {
+  test.use({ ignoreHTTPSErrors: true });
   let server: ConnectPwaServer;
   let bridge: PickerWaterBridge;
   let testRoot: string;
@@ -38,7 +38,7 @@ test.describe('Picker water hub notifications (installed PWA only)', () => {
   });
 
   test('API returns due picker notifications', async () => {
-    const data = await fetch(`${baseUrl}/api/picker-water/notifications`, { agent } as RequestInit).then(r => r.json());
+    const data = await hubFetch(`${baseUrl}/api/picker-water/notifications`).then(r => r.json());
     expect(data.count).toBeGreaterThan(0);
     expect(data.items[0].pickerName).toBe('Dock Picker');
   });

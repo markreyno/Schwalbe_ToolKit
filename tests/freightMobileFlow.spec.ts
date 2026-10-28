@@ -68,7 +68,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       await page.screenshot({ path: path.join(desktopArtifactDir, 'freight-desktop-subfolder.png'), fullPage: true });
 
       const mobile = await browser.newPage();
-      const url = shipment.url.replace(/^https?:\/\/[^/]+/, `http://127.0.0.1:${FREIGHT_PHONE_PORT}`);
+      const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
       await mobile.goto(url);
       await mobile.waitForSelector('.phone-home-link');
       await expect(mobile.locator('#app-version')).toContainText(/^v\d+\.\d+\.\d+$/);
