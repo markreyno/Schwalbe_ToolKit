@@ -19,22 +19,23 @@ test.describe('toolPhoneUrls host resolution', () => {
     expect(url).toBe('https://100.64.0.8:48731/?key=master');
   });
 
-  test('resolveConnectPwaTools embeds shipment key for open freight on LAN host', () => {
+  test('resolveConnectPwaTools opens freight hub entry without shipment key', () => {
     const tools = resolveConnectPwaTools('192.168.1.50', {
       root: '/data',
       running: true,
-      addresses: ['https://192.168.1.50:48731'],
-      masterUrl: 'https://192.168.1.50:48731/?key=master-key',
-      shipments: [{ closed: false, url: 'https://192.168.1.50:48731/?key=shipment-key' }]
+      addresses: ['http://192.168.1.50:48731'],
+      masterUrl: 'http://192.168.1.50:48731/?key=master-key',
+      shipments: [{ closed: false, url: 'http://192.168.1.50:48731/?key=shipment-key' }]
     }, {
       root: '/pv',
       running: true,
-      addresses: ['https://192.168.1.50:48732'],
-      qrUrl: 'https://192.168.1.50:48732/'
-    });
+      addresses: ['http://192.168.1.50:48732'],
+      qrUrl: 'http://192.168.1.50:48732/'
+    }, true);
     expect(tools[0].ready).toBe(true);
-    expect(tools[0].url).toBe('https://192.168.1.50:48731/?key=shipment-key');
-    expect(tools[1].url).toBe('https://192.168.1.50:48732/');
+    expect(tools[0].url).toBe('http://192.168.1.50:48731/');
+    expect(tools[0].url).not.toContain('key=');
+    expect(tools[1].url).toBe('http://192.168.1.50:48732/');
   });
 
   test('resolveConnectPwaTools uses Tailscale host for palletvision when requested', () => {
@@ -53,21 +54,21 @@ test.describe('toolPhoneUrls host resolution', () => {
     expect(tools[1].url).toBe('https://desk.tailnet.ts.net:48732/');
   });
 
-  test('freight not ready without open shipment', () => {
+  test('freight hub entry stays ready when only closed shipments exist on desktop', () => {
     const tools = resolveConnectPwaTools('192.168.1.50', {
       root: '/data',
       running: true,
-      addresses: ['https://192.168.1.50:48731'],
-      masterUrl: 'https://192.168.1.50:48731/?key=master-key',
-      shipments: [{ closed: true, url: 'https://192.168.1.50:48731/?key=old' }]
+      addresses: ['http://192.168.1.50:48731'],
+      masterUrl: 'http://192.168.1.50:48731/?key=master-key',
+      shipments: [{ closed: true, url: 'http://192.168.1.50:48731/?key=old' }]
     }, {
       root: '/pv',
       running: true,
-      addresses: ['https://192.168.1.50:48732'],
-      qrUrl: 'https://192.168.1.50:48732/'
-    });
-    expect(tools[0].ready).toBe(false);
-    expect(tools[0].message).toContain('shipment');
+      addresses: ['http://192.168.1.50:48732'],
+      qrUrl: 'http://192.168.1.50:48732/'
+    }, true);
+    expect(tools[0].ready).toBe(true);
+    expect(tools[0].url).toBe('http://192.168.1.50:48731/');
   });
 
   test('isAllowedHubHost accepts private IPs and hostnames', () => {

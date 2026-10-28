@@ -17,6 +17,7 @@ import { FREIGHT_PHONE_PORT } from './toolPhoneUrls';
 export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0 ? Number(process.env.FREIGHT_BATCH_TTL_MS) : 60000;
 
 const phoneHubNavJs = () => readFileSync(path.join(__dirname, 'phoneHubNav.js'), 'utf8');
+const freightUploadQueueJs = () => readFileSync(path.join(__dirname, 'freightUploadQueue.js'), 'utf8');
 const freightMobileInlineJs = () => readFileSync(path.join(__dirname, 'freightMobileInline.js'), 'utf8');
 let freightAppVersion: string | undefined;
 function freightAppVersionLabel(): string {
@@ -42,7 +43,7 @@ function isPrivateIP(ip: string): boolean {
 
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string; phoneSubfolder?: string };
-type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; expires: number; uploadDir: string; uploadFolderLabel: string };
+type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; lockUntil: number; uploadDir: string; uploadFolderLabel: string };
 export class FreightServer {
   private phoneHandle?: PhoneServerHandle;
   private root = '';
@@ -102,7 +103,26 @@ export class FreightServer {
     this.persistence = next;
     return next;
   }
-  async setRoot(root: string) { if ((this.batch && this.batch.expires > Date.now()) || this.writing) throw new Error('Finish the active upload first.'); await fs.access(root); this.root = root; await this.persist(); }
+  async setRoot(root: string) {
+    if ((this.batch && this.batchHasUnfinishedFiles()) || this.writing) throw new Error('Finish the active upload first.');
+    await fs.access(root);
+    this.root = root;
+    await this.persist();
+  }
+  private batchHasUnfinishedFiles(batch = this.batch) {
+    return !!batch && batch.files.some(f => !f.saved);
+  }
+  private touchBatchLock() {
+    if (this.batch) this.batch.lockUntil = Date.now() + FREIGHT_BATCH_TTL_MS;
+  }
+  private phoneUploadProgress(shipment?: Shipment) {
+    const batch = this.batch;
+    if (!batch || !shipment || batch.shipment !== shipment) return null;
+    const total = batch.files.length;
+    const completed = batch.files.filter(f => f.saved).length;
+    if (completed >= total && total > 0 && !this.batchHasUnfinishedFiles(batch)) return null;
+    return { batchId: batch.id, total, completed };
+  }
   private async removeEmptyUploadSubfolder(uploadDir: string, shipmentFolder: string) {
     const root = path.resolve(shipmentFolder);
     const dir = path.resolve(uploadDir);
@@ -147,7 +167,7 @@ export class FreightServer {
   async setPhoneSubfolder(id: string, subfolderInput: string) {
     const shipment = this.shipments.find(s => s.id === id);
     if (!shipment) throw new Error('Shipment not found.');
-    if (this.batch && this.batch.shipment === shipment && this.batch.expires > Date.now()) {
+    if (this.batch && this.batch.shipment === shipment && this.batchHasUnfinishedFiles()) {
       throw new Error('Finish or cancel the active phone upload before changing the subfolder.');
     }
     const trimmed = (subfolderInput ?? '').trim();
@@ -200,7 +220,7 @@ export class FreightServer {
   /** Phone or desktop: rename empty shipment folder, or create a new shipment if pictures/files already exist. */
   async updateShipmentFromPhone(shipment: Shipment, company: string, date: string) {
     if (shipment.closed) throw new Error('This shipment is complete. Start a new shipment instead.');
-    if (this.batch && this.batch.shipment === shipment && this.batch.expires > Date.now()) {
+    if (this.batch && this.batch.shipment === shipment && this.batchHasUnfinishedFiles()) {
       throw new Error('Finish or cancel the active upload before changing the shipment.');
     }
     const meta = this.validateShipmentMeta(company, date);
@@ -262,6 +282,7 @@ export class FreightServer {
           ...s,
           phoneSubfolder: s.phoneSubfolder ?? '',
           saveTarget: this.saveTargetLabel(s),
+          phoneUpload: this.phoneUploadProgress(s),
           subfolders: await this.listShipmentSubfolderNames(s.folder),
           url: `${base}/?key=${s.token}`,
           qr: s.closed ? '' : await QRCode.toDataURL(`${base}/?key=${s.token}`)
@@ -283,12 +304,45 @@ export class FreightServer {
       res.end(phoneHubNavJs());
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/freightUploadQueue.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(freightUploadQueueJs());
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/freightMobileInline.js') {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(freightMobileInlineJs());
       return;
     }
+    const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     const key = url.searchParams.get('key');
+    if (!key) {
+      if (req.headers.origin) {
+        const originHost = new URL(req.headers.origin).host;
+        if (originHost !== req.headers.host) {
+          throw new Error('Invalid request origin. Origin host does not match request host.');
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+        res.end(mobilePage);
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/state') {
+        json({ hubEntry: true, configured: !!this.root, appVersion: freightAppVersionLabel() });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/shipment/new') {
+        if (!this.root) throw new Error('Choose the storage folder in the desktop toolkit first.');
+        const data = JSON.parse((await this.body(req, 4096)).toString());
+        const s = await this.create(data.company, data.date);
+        json({ key: s.token, company: s.company, date: s.date });
+        return;
+      }
+      res.writeHead(403);
+      res.end('Invalid Freight Pictures link.');
+      return;
+    }
     const shipment = this.shipments.find(s => s.token === key);
     const master = key === this.master;
     if (!master && !shipment) { res.writeHead(403); res.end('Invalid Freight Pictures link.'); return; }
@@ -298,7 +352,6 @@ export class FreightServer {
         throw new Error('Invalid request origin. Origin host does not match request host.');
       }
     }
-    const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(mobilePage); return; }
     if (req.method === 'GET' && url.pathname === '/state') {
       json({
@@ -313,7 +366,8 @@ export class FreightServer {
           pictures: shipment.pictures,
           defaultUploadFolder: path.basename(shipment.folder),
           lastUploadSubfolder: shipment.lastUploadSubfolder,
-          saveTarget: this.saveTargetLabel(shipment)
+          saveTarget: this.saveTargetLabel(shipment),
+          phoneUpload: this.phoneUploadProgress(shipment)
         },
         shipments: master ? this.shipments.filter(s => !s.closed).map(s => ({ company: s.company, date: s.date, key: s.token })) : []
       });
@@ -333,13 +387,33 @@ export class FreightServer {
     }
     if (!shipment || shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
     if (req.method === 'POST' && url.pathname === '/cancel-active') {
-      if (this.batch && this.batch.shipment === shipment && this.batch.expires > Date.now()) await this.abandonBatch();
+      if (this.batch && this.batch.shipment === shipment) await this.abandonBatch();
       json({ canceled: true });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/batch') {
-      if (this.batch && this.batch.expires > Date.now()) throw new Error('An upload is already active. Retry the current batch or wait 1 minute.');
       const data = JSON.parse((await this.body(req, 100000)).toString());
+      if (this.batch && this.batch.shipment === shipment && this.batchHasUnfinishedFiles()) {
+        if (data.batchId && data.batchId !== this.batch.id) throw new Error('Another upload batch is already in progress on the desktop.');
+        this.touchBatchLock();
+        const completed = this.batch.files.filter(f => f.saved).length;
+        json({
+          id: this.batch.id,
+          uploadFolder: this.batch.uploadFolderLabel,
+          resumed: true,
+          total: this.batch.files.length,
+          completed
+        });
+        return;
+      }
+      if (
+        this.batch &&
+        this.batch.lockUntil > Date.now() &&
+        this.batch.shipment === shipment &&
+        !this.batchHasUnfinishedFiles()
+      ) {
+        throw new Error('An upload is already active. Retry the current batch or wait 1 minute.');
+      }
       if (!Array.isArray(data.files) || data.files.length < 1 || data.files.length > MAX_FREIGHT_PICTURES || data.pallets !== data.files.length) throw new Error('Select 1 to 26 pictures and confirm one picture per pallet.');
       for (const f of data.files) if (typeof f.name !== 'string' || !/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(f.name) || !Number.isInteger(f.size) || f.size < 1 || f.size > 100 * 1024 * 1024 || (f.hash !== undefined && !/^[a-f0-9]{64}$/.test(f.hash))) throw new Error('Choose image files up to 100 MB each.');
       const uploadDir = this.uploadDirForShipment(shipment);
@@ -347,17 +421,21 @@ export class FreightServer {
       this.batch = {
         id: token(),
         shipment,
-        files: data.files,
-        expires: Date.now() + FREIGHT_BATCH_TTL_MS,
+        files: data.files.map((f: { name: string; size: number; hash?: string }) => ({
+          name: f.name,
+          size: f.size,
+          hash: typeof f.hash === 'string' ? f.hash : undefined
+        })),
+        lockUntil: Date.now() + FREIGHT_BATCH_TTL_MS,
         uploadDir,
         uploadFolderLabel: path.basename(uploadDir)
       };
-      json({ id: this.batch.id, uploadFolder: this.batch.uploadFolderLabel });
+      json({ id: this.batch.id, uploadFolder: this.batch.uploadFolderLabel, total: this.batch.files.length, completed: 0 });
       return;
     }
     const batch = this.batch;
     if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
-    batch.expires = Date.now() + FREIGHT_BATCH_TTL_MS;
+    this.touchBatchLock();
     if (req.method === 'POST' && url.pathname === '/cancel') { await this.abandonBatch(); json({ canceled: true }); return; }
     if (req.method === 'POST' && url.pathname === '/file') {
       if (this.writing) throw new Error('Another picture is being saved. Retry.');
@@ -370,16 +448,27 @@ export class FreightServer {
         const expectedHash = f.hash ?? req.headers['x-picture-sha256'];
         if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Picture checksum is required. Retry.');
         const bytes = await this.body(req, f.size);
-        if (clientAborted || req.aborted) { await this.abandonBatch(); return; }
+        if (f.saved && f.hash === expectedHash) {
+          json({ saved: true, duplicate: true });
+          return;
+        }
+        if (clientAborted || req.aborted) {
+          if (!res.headersSent) res.end();
+          return;
+        }
         if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
-        try { validateFreightImage(bytes, f.name); } catch (e) { await this.abandonBatch(); throw e; }
+        try { validateFreightImage(bytes, f.name); } catch (e) { throw e; }
         f.hash = expectedHash;
         if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${path.extname(f.name).toLowerCase()}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
         json({ saved: true });
       } catch (e) {
-        if (clientAborted || req.aborted) { await this.abandonBatch(); return; }
+        if (clientAborted || req.aborted) {
+          if (!res.headersSent) res.end();
+          return;
+        }
         throw e;
-      } finally { this.writing = false; } return;
+      } finally { this.writing = false; }
+      return;
     }
     if (req.method === 'POST' && url.pathname === '/finish') {
       if (this.writing) throw new Error('Wait for the current picture to save.');
