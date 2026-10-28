@@ -36,7 +36,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 3. If you leave the page, lose Wi‑Fi, or turn the screen off, the queue stays on the phone. Reopen **Freight Pictures** (shipment link, master link, or Connect hub) to see **Resuming upload: X of Y pictures**.
 4. Desktop shows **Upload in progress (X of Y)** until the batch finishes.
 
-**HTTPS (default):** Background Fetch can continue uploads with the screen off on supported Android browsers. **HTTP fallback** (certificate not ready) behaves like plain HTTP: uploads pause when the page is closed or the phone is asleep; reopen to resume. IndexedDB resume works in both cases.
+**HTTPS only:** Phone Freight requires a working desktop certificate. There is no HTTP fallback on port 48731. Background Fetch (Android Chrome) needs HTTPS and a trusted cert. IndexedDB resume still works if you reopen the shipment link after an interruption.
 
 ## Upload batch lock (1 minute)
 
@@ -55,7 +55,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 - Allow the toolkit on **Windows Firewall** (private network).
 - Guest Wi‑Fi that blocks device-to-device traffic will fail; use LAN or Tailscale.
 - Cross-subnet/VLAN works when routing allows private traffic between subnets.
-- If QR fails, copy/paste the link or type `http://<desktop-host>:48731/` manually.
+- If QR fails, copy/paste the **https://** link from the desktop or open Freight from the Connect hub after HTTPS is ready.
 
 ## Tailscale
 

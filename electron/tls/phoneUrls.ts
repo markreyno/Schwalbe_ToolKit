@@ -40,9 +40,7 @@ export async function listPhoneUrlHosts(options: {
   let hosts: string[] = [];
   if (options.useTailscale) {
     if (tailscale.hostname) hosts = [tailscale.hostname.replace(/\.$/, '')];
-    else if (options.allowInsecureHttp && tailscale.address) {
-      hosts = [tailscale.address];
-    } else if (!tailscale.error && tailscale.address) {
+    else if (!tailscale.error && tailscale.address) {
       throw new Error('Tailscale HTTPS requires a MagicDNS name. Enable MagicDNS on your tailnet or use local network mode.');
     }
   } else {

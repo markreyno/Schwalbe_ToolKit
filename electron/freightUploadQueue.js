@@ -1,5 +1,5 @@
 /**
- * Persistent freight picture upload queue (IndexedDB). Works on plain HTTP.
+ * Persistent freight picture upload queue (IndexedDB). Requires HTTPS for Background Fetch; queue resume works over HTTPS.
  * Exposes window.FreightUploadQueue.
  */
 (function (global) {

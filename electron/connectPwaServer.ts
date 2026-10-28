@@ -138,12 +138,9 @@ export class ConnectPwaServer {
   }
 
   private probePhonePort(port: number): Promise<boolean> {
-    const useHttp = this.tlsManager.getPhoneHttpMode();
     return new Promise(resolve => {
-      const req = (useHttp ? http.get : https.get)(
-        useHttp
-          ? { host: '127.0.0.1', port, path: '/', timeout: 1500 }
-          : { host: '127.0.0.1', port, path: '/', timeout: 1500, rejectUnauthorized: false },
+      const req = https.get(
+        { host: '127.0.0.1', port, path: '/', timeout: 1500, rejectUnauthorized: false },
         res => {
           res.resume();
           resolve(res.statusCode !== undefined && res.statusCode < 500);
@@ -180,7 +177,7 @@ export class ConnectPwaServer {
     const phoneTls = await this.tlsManager.publicStatus(this.useTailscale, primaryHost, {
       hubPort: this.port || CONNECT_PWA_PORT
     });
-    const scanUrl = phoneTls.phoneUseHttps && phoneTls.requiresCaTrust ? phoneTls.caTrustHttpUrl : phoneTls.installHttpsUrl;
+    const scanUrl = phoneTls.requiresCaTrust ? phoneTls.caTrustHttpUrl : phoneTls.installHttpsUrl;
     return {
       running: !!this.port,
       port: this.port,
@@ -217,8 +214,7 @@ export class ConnectPwaServer {
 
   private manifestOrigin(req: http.IncomingMessage) {
     const host = req.headers.host || `127.0.0.1:${this.port || CONNECT_PWA_PORT}`;
-    const scheme = this.tlsManager.getPhoneHttpMode() ? 'http' : 'https';
-    return `${scheme}://${host}`;
+    return `https://${host}`;
   }
 
   private async readManifest(req: http.IncomingMessage) {

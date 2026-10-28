@@ -43,7 +43,6 @@ export function ConnectPwaPage() {
   }
 
   const tls = state?.phoneTls;
-  const linksHttp = tls?.allowInsecureHttp ?? false;
 
   return <>
     <Link to="/" className="back-link"><ArrowLeft size={16}/> All tools</Link>
@@ -59,18 +58,14 @@ export function ConnectPwaPage() {
     <div className="freight-layout">
       <div>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-phone-hub" title="Phone hub server" defaultOpen>
-          <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable.'} Keep the toolkit open.</p>
-          <label>
-            <input type="checkbox" checked={tls?.phoneUseHttps ?? true} disabled={busy} onChange={e => void action('setPhoneUseHttps', { enabled: e.target.checked, usePhoneHttps: e.target.checked })} />
-            Use HTTPS for phone tools (recommended)
-          </label>
+          <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable until HTTPS is ready.'} Keep the toolkit open.</p>
           <PhoneTlsStatus tls={tls} />
-          {(tls?.tlsError || tls?.httpFallback) && (
+          {(!tls?.tlsReady || tls?.tlsError) && (
             <button type="button" disabled={busy} onClick={() => void action('retryPhoneCertificate')}>Retry certificate</button>
           )}
           {state?.error && <p role="alert">{state.error}</p>}
-          {tls?.phoneUseHttps && !linksHttp && (
-            <p className="freight-muted">Service worker, installable PWA (<code>/install</code>), and Picker Water push require HTTPS and a trusted certificate.</p>
+          {tls?.tlsReady && (
+            <p className="freight-muted">All phone links use HTTPS. Service worker, installable PWA (<code>/install</code>), and Picker Water push require a trusted certificate on the phone.</p>
           )}
         </CollapsibleSection>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-reachability" title="Reachability">
@@ -116,7 +111,7 @@ export function ConnectPwaPage() {
         <input aria-label="Phone hub link" readOnly value={url}/>
         <button disabled={!url} onClick={() => { void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(e => setError(String(e))); }}>{copied ? 'Link copied' : 'Copy link'}</button>
         <p className="freight-muted">
-          Hub links use {linksHttp ? 'HTTP' : 'HTTPS'} on port {state?.port}.
+          Hub links use HTTPS on port {state?.port}.
           The QR opens the <strong>install</strong> page (<code>/install</code>); the warehouse hub stays free of install prompts.
         </p>
       </section>

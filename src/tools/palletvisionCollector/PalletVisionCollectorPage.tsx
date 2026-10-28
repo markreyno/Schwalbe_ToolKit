@@ -133,7 +133,7 @@ export function PalletVisionCollectorPage() {
           </div>
           <p className="freight-muted">{state?.running ? 'Upload server is running on port 48732.' : 'Upload server is unavailable.'} Keep the toolkit open.</p>
           <PhoneTlsStatus tls={state?.phoneTls} />
-          {(state?.phoneTls?.tlsError || state?.phoneTls?.httpFallback) && <button type="button" disabled={busy} onClick={() => void action('retryPhoneCertificate')}>Retry certificate</button>}
+          {(state?.phoneTls?.tlsError || !state?.phoneTls?.tlsReady) && <button type="button" disabled={busy} onClick={() => void action('retryPhoneCertificate')}>Retry certificate</button>}
           {state?.error && <p role="alert">{state.error}</p>}
           {state?.events?.length ? <div style={{ marginTop: '12px', fontSize: '11px', color: '#7b8694' }}>
             <p style={{ fontWeight: 600, marginBottom: '6px' }}>Activity log</p>

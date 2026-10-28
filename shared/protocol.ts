@@ -38,7 +38,7 @@ export type PhoneTlsState = {
   allowInsecureHttp: boolean;
   phoneUseHttps: boolean;
   httpFallback: boolean;
-  mode: 'tailscale' | 'insecure' | 'local' | 'http' | 'http-fallback' | 'pending';
+  mode: 'tailscale' | 'local' | 'pending' | 'unavailable';
   caFingerprint: string;
   caTrustHttpUrl: string;
   caTrustQr: string;

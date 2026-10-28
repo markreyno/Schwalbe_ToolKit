@@ -33,6 +33,17 @@
     <a class="btn-primary" id="open-hub-link" href="/" hidden>Open warehouse tools</a>
   </section>
 
+  <section class="panel" id="ghost-install-panel" hidden>
+    <h2>App missing after uninstall?</h2>
+    <p class="note">Android sometimes keeps an old “installed” flag after you removed the app. Clear it, then install again:</p>
+    <ol class="install-steps">
+      <li><strong>Settings → Apps</strong> — uninstall <strong>Schwalbe ToolKit</strong> or remove it from the home screen if it still appears.</li>
+      <li><strong>Chrome → Site settings</strong> for this desktop address — tap <strong>Clear &amp; reset</strong> or delete site data.</li>
+      <li>Return here and use <strong>Install app</strong> again, or open the <a href="/">warehouse hub in Chrome</a>.</li>
+    </ol>
+    <button type="button" class="btn-primary" id="ghost-retry-install">Show install steps again</button>
+  </section>
+
   <section class="panel" id="install-panel">
     <h2 id="install-heading">Add to home screen</h2>
     <div id="android-install" hidden>
@@ -45,7 +56,7 @@
       <li>Open <strong>Schwalbe ToolKit</strong> from your home screen.</li>
     </ol>
     <p class="note" id="generic-install" hidden>Use your browser menu to install or add this page to your home screen.</p>
-    <p class="note" id="http-install-note" hidden>Install and offline mode need HTTPS. You can still open the <a href="/">warehouse hub in the browser</a> over HTTP.</p>
+    <p class="note" id="https-install-note" hidden>Install and Background Fetch need HTTPS with a trusted certificate. If the page warns about security, trust the desktop CA first (port 48730), then reload.</p>
   </section>
 
   <p class="note install-footer"><a href="/">Continue in browser without installing</a></p>
