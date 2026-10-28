@@ -54,7 +54,6 @@ test('freight mobile upload verifies original files, closes links, reuploads and
     const tooMany = await hubPostJson(api('/batch?'), { pallets: 27, files: Array.from({ length: 27 }, () => manifest.files[0]) });
     expect(tooMany.status).toBe(400); expect((await tooMany.json() as { error: string }).error).toContain('26');
     const fake = Buffer.from('This is not an image, despite the .png filename.');
-<<<<<<< HEAD
     const fakeBatch = await (await hubPostJson(api('/batch?'), { pallets: 1, files: [{ name: 'fake.png', size: fake.length, hash: createHash('sha256').update(fake).digest('hex') }] })).json() as { id: string };
     const fakeResult = await hubPostBytes(api('/file?batch=' + fakeBatch.id + '&index=0'), fake);
     expect(fakeResult.status).toBe(400); expect((await fakeResult.json() as { error: string }).error).toContain('not a valid image');
@@ -70,23 +69,6 @@ test('freight mobile upload verifies original files, closes links, reuploads and
     for (let i=0;i<2;i++) expect((await hubPostBytes(api('/file?batch=' + batch.id + '&index=0'), bytes)).status).toBe(200);
     for (let i=1;i<26;i++) expect((await hubPostBytes(api('/file?batch=' + batch.id + '&index=' + i), bytes)).status).toBe(200);
     expect((await hubPostJson(api('/finish?batch=' + batch.id), {})).status).toBe(200); expect(await fs.readdir(open.folder)).toHaveLength(26);
-=======
-    const fakeBatch = await (await request.post(api('/batch?'), { data: { pallets: 1, files: [{ name: 'fake.png', size: fake.length, hash: createHash('sha256').update(fake).digest('hex') }] } })).json();
-    const fakeResult = await request.post(api('/file?batch=' + fakeBatch.id + '&index=0'), { data: fake });
-    expect(fakeResult.status()).toBe(400); expect((await fakeResult.json()).error).toContain('not a valid image');
-    await request.post(api('/cancel?batch=' + fakeBatch.id), {});
-    expect(await fs.readdir(open.folder)).toHaveLength(0);
-    const fullManifest = { pallets: 26, files: Array.from({ length: 26 }, () => manifest.files[0]) };
-    const batch = await (await request.post(api('/batch?'), { data: fullManifest })).json();
-    const resumed = await request.post(api('/batch?'), { data: manifest });
-    expect(resumed.status()).toBe(200);
-    expect((await resumed.json()).resumed).toBe(true);
-    expect((await request.post(api('/finish?batch=' + batch.id), {})).status()).toBe(400);
-    expect((await request.post(api('/file?batch=' + batch.id + '&index=0'), { data: Buffer.alloc(bytes.length) })).status()).toBe(400);
-    for (let i=0;i<2;i++) expect((await request.post(api('/file?batch=' + batch.id + '&index=0'), { data: bytes })).status()).toBe(200);
-    for (let i=1;i<26;i++) expect((await request.post(api('/file?batch=' + batch.id + '&index=' + i), { data: bytes })).status()).toBe(200);
-    expect((await request.post(api('/finish?batch=' + batch.id), {})).status()).toBe(200); expect(await fs.readdir(open.folder)).toHaveLength(26);
->>>>>>> cursor/freight-phone-new-shipment-04ee
     await app.close(); app = await electron.launch({ ...(process.env.TOOLKIT_EXECUTABLE ? { executablePath: process.env.TOOLKIT_EXECUTABLE } : { args: ['.'] }), env });
     const second = await app.firstWindow(); const persisted = await second.evaluate(() => window.toolkit.freight('status')); expect(persisted.shipments.find(s => s.id === shipment.id)?.closed).toBe(true); expect(persisted.masterUrl).toBe(state.masterUrl);
   } finally { await app.close(); }
