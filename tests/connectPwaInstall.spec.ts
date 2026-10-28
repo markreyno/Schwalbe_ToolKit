@@ -4,14 +4,16 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdir, copyFile } from 'node:fs/promises';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
+import { hubBaseUrl, hubFetch } from './helpers/hubHttps';
 
 const screenshotDir = path.resolve('test-results', 'connect-pwa-install');
 const artifactDir = path.resolve('/opt/cursor/artifacts/screenshots', 'connect-pwa-install');
 
 test.describe('Connect PWA /install page', () => {
+  test.use({ ignoreHTTPSErrors: true });
   let server: ConnectPwaServer;
   let testRoot: string;
-  const baseUrl = `http://127.0.0.1:${CONNECT_PWA_PORT}`;
+  const baseUrl = hubBaseUrl(CONNECT_PWA_PORT);
 
   test.beforeAll(async () => {
     testRoot = path.resolve('.cache/connect-pwa-install-test', randomUUID());
@@ -21,9 +23,14 @@ test.describe('Connect PWA /install page', () => {
     server = new ConnectPwaServer(path.join(testRoot, 'settings.json'), tls, async () => []);
     await server.start();
     const status = await server.status();
-    expect(status.phoneTls.mode).toBe('http');
-    expect(status.qrUrl).toMatch(/^http:\/\//);
-    expect(status.qrUrl).toMatch(/\/install$/);
+    expect(status.phoneTls.phoneUseHttps).toBe(true);
+    if (status.phoneTls.requiresCaTrust) {
+      expect(status.qrUrl).toMatch(/^http:\/\//);
+      expect(status.qrUrl).toMatch(/install/);
+    } else {
+      expect(status.qrUrl).toMatch(/^https:\/\//);
+      expect(status.qrUrl).toMatch(/\/install(?:\?|$)/);
+    }
   });
 
   test.afterAll(async () => {
@@ -31,18 +38,18 @@ test.describe('Connect PWA /install page', () => {
   });
 
   test('manifest includes scope, launch_handler, and related_applications', async () => {
-    const manifest = await fetch(`${baseUrl}/manifest.webmanifest`).then(r => r.json());
+    const manifest = await hubFetch(`${baseUrl}/manifest.webmanifest`).then(r => r.json());
     expect(manifest.id).toBe('/');
     expect(manifest.scope).toBe('/');
     expect(manifest.start_url).toBe('/');
     expect(manifest.launch_handler?.client_mode).toBe('navigate-existing');
     expect(manifest.handle_links).toBe('preferred');
     expect(manifest.related_applications?.[0]?.url).toContain('/manifest.webmanifest');
-    expect(manifest.related_applications?.[0]?.url).toMatch(/^http:\/\//);
+    expect(manifest.related_applications?.[0]?.url).toMatch(/^https:\/\//);
   });
 
   test('hub page has no install UI', async () => {
-    const html = await fetch(`${baseUrl}/`).then(r => r.text());
+    const html = await hubFetch(`${baseUrl}/`).then(r => r.text());
     expect(html).not.toContain('Add to Home Screen');
     expect(html).not.toContain('install-panel');
   });

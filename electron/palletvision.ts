@@ -42,6 +42,7 @@ export async function registerPalletVision(window: () => BrowserWindow | null, t
     }
     else if (action === 'setTailscale') await service.setTailscaleMode(data?.enabled);
     else if (action === 'setAllowInsecureHttp') await tlsManager.setAllowInsecureHttp(!!data?.enabled);
+    else if (action === 'retryPhoneCertificate') await tlsManager.retryCertificate();
     else if (action === 'update') await service.updateMetadata(data?.id, data?.updates);
     else if (action !== 'status') throw new Error('Unsupported action.');
     

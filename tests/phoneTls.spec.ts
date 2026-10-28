@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import https from 'node:https';
 import http from 'node:http';
+import tls from 'node:tls';
 import fs from 'node:fs/promises';
 import { rm } from 'node:fs/promises';
 import { createTestPhoneTlsManager } from './helpers/phoneTlsTest';
@@ -11,10 +12,11 @@ import { startPhoneToolServer } from '../electron/tls/phoneServer';
 import { startCaTrustServer } from '../electron/tls/caTrustServer';
 import { ensureLocalTlsMaterial } from '../electron/tls/localCa';
 import { buildPhoneOrigin } from '../electron/tls/phoneUrls';
+import { certExpiresSoon } from '../electron/tls/tailscaleCert';
 
-function httpsGet(url: string): Promise<{ status: number; body: string }> {
+function httpsGet(url: string, servername?: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { rejectUnauthorized: false }, res => {
+    const req = https.get(url, { rejectUnauthorized: false, servername }, res => {
       const chunks: Buffer[] = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') }));
@@ -35,28 +37,38 @@ function httpGet(url: string): Promise<{ status: number; body: string }> {
 }
 
 test.describe('phone TLS infrastructure', () => {
-  test('phone TLS defaults to HTTP mode', async () => {
+  test('phone TLS defaults to HTTPS mode', async () => {
     const root = path.resolve('.cache/phone-tls-default', randomUUID());
     const manager = new PhoneTlsManager(root);
     await manager.load();
-    expect(manager.getPhoneHttpMode()).toBe(true);
-    expect(manager.getPhoneUseHttps()).toBe(false);
-    const status = await manager.publicStatus(false, '127.0.0.1');
-    expect(status.mode).toBe('http');
-    expect(status.installHttpsUrl).toMatch(/^http:\/\//);
+    expect(manager.getPhoneUseHttps()).toBe(true);
+    expect(manager.getPhoneHttpMode()).toBe(false);
     await rm(root, { recursive: true, force: true });
   });
 
-  test('load migrates legacy usePhoneHttps=true to HTTP', async () => {
+  test('HTTPS preference persists across reload', async () => {
+    const root = path.resolve('.cache/phone-tls-persist', randomUUID());
+    const manager = new PhoneTlsManager(root);
+    await manager.load();
+    await manager.setPhoneUseHttps(false);
+    const manager2 = new PhoneTlsManager(root);
+    await manager2.load();
+    expect(manager2.getPhoneUseHttps()).toBe(false);
+    await manager2.setPhoneUseHttps(true);
+    const manager3 = new PhoneTlsManager(root);
+    await manager3.load();
+    expect(manager3.getPhoneUseHttps()).toBe(true);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test('load migrates legacy allowInsecureHttp to usePhoneHttps', async () => {
     const root = path.resolve('.cache/phone-tls-migrate', randomUUID());
     await fs.mkdir(root, { recursive: true });
     const settingsPath = path.join(root, 'phone-tls-settings.json');
-    await fs.writeFile(settingsPath, JSON.stringify({ usePhoneHttps: true }));
+    await fs.writeFile(settingsPath, JSON.stringify({ allowInsecureHttp: true }));
     const manager = new PhoneTlsManager(root);
     await manager.load();
     expect(manager.getPhoneUseHttps()).toBe(false);
-    const saved = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
-    expect(saved.usePhoneHttps).toBe(false);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -68,9 +80,21 @@ test.describe('phone TLS infrastructure', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test('phone tool server serves HTTP by default', async () => {
+  test('HTTP URLs when user disables HTTPS', async () => {
+    const root = path.resolve('.cache/phone-tls-fallback', randomUUID());
+    const manager = new PhoneTlsManager(root);
+    await manager.load();
+    await manager.setPhoneUseHttps(false);
+    expect(manager.getPhoneHttpMode()).toBe(true);
+    const status = await manager.publicStatus(false, '127.0.0.1');
+    expect(status.mode).toBe('http');
+    expect(status.installHttpsUrl).toMatch(/^http:\/\//);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test('phone tool server serves HTTP when TLS disabled', async () => {
     const root = path.resolve('.cache/phone-tls-http', randomUUID());
-    const manager = await createTestPhoneTlsManager(root);
+    const manager = await createTestPhoneTlsManager(root, { usePhoneHttps: false });
     const port = 48798;
     const handle = await startPhoneToolServer({
       port,
@@ -108,6 +132,44 @@ test.describe('phone TLS infrastructure', () => {
 
     await handle.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  test('SNI serves Tailscale certificate for ts.net hostnames', async () => {
+    const root = path.resolve('.cache/phone-tls-sni', randomUUID());
+    const local = await ensureLocalTlsMaterial(root, false, ['127.0.0.1', '192.168.1.10']);
+    const tailscale = await ensureLocalTlsMaterial(path.join(root, 'ts'), false, ['test-machine.tailbbbe79.ts.net']);
+    const tlsMaterial = {
+      cert: local.serverCertPem,
+      key: local.serverKeyPem,
+      sniSuffix: '.ts.net',
+      sniCert: tailscale.serverCertPem,
+      sniKey: tailscale.serverKeyPem
+    };
+    const port = 48797;
+    const handle = await startPhoneToolServer({
+      port,
+      tls: tlsMaterial,
+      allowInsecureHttp: false,
+      handler: (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('ok');
+      }
+    });
+    const socket = tls.connect({ host: '127.0.0.1', port, servername: 'test-machine.tailbbbe79.ts.net', rejectUnauthorized: false }, () => {
+      const cert = socket.getPeerCertificate();
+      expect(cert.subjectaltname || '').toContain('test-machine.tailbbbe79.ts.net');
+      socket.end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.on('error', reject);
+      socket.on('close', () => resolve());
+    });
+    await handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test('tailscale cert renewal threshold is 30 days', () => {
+    expect(certExpiresSoon('not-a-cert', 30)).toBe(true);
   });
 
   test('CA trust HTTP server only serves certificate assets', async () => {

@@ -8,7 +8,7 @@
 - Optional installable Progressive Web App (manifest + service worker) when **HTTPS** is enabled
 - Status indicator shows whether desktop tool servers are reachable from the hub
 - Tracks recently connected phones (IP, user agent, last seen)
-- **Tailscale** or **local network** modes (HTTP by default on port **48734**)
+- **Tailscale** or **local network** modes (**HTTPS** by default on port **48734**; HTTP fallback if the certificate is not ready)
 
 ## Step-by-step (desktop)
 
@@ -21,8 +21,8 @@
 ## Step-by-step (phone)
 
 1. Scan the desktop **Connect PWA** QR code or open the link. It goes to **`/install`** (not the hub directly).
-2. **HTTP (default):** use **Continue in browser without installing** on the install page, or open the hub URL directly. Uploads and tool tiles work without certificates.
-3. **HTTPS (optional):** after enabling HTTPS on the desktop and trusting the certificate, follow the install page (Android install prompt or iOS **Add to Home Screen**).
+2. **HTTPS (default):** trust the Tailscale cert (tailnet) or install the desktop CA (local LAN), then use the install page (Android install prompt or iOS **Add to Home Screen**).
+3. **HTTP fallback:** if the desktop shows a certificate error, links use HTTP until fixed; uploads still work. Use **Continue in browser** on the install page if needed.
 4. On the **warehouse hub** (`/`), confirm the status line when possible and tap a tool tile for **Freight Pictures** or **PalletVision**.
 5. Use the **Home** arrow (top-left) on tool pages to return to the hub.
 

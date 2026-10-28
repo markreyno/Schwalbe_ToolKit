@@ -4,7 +4,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 
 ## Ports and security
 
-- Desktop phone server: TCP **48731** (HTTP by default; see [Phone transport](phone-https.md))
+- Desktop phone server: TCP **48731** (HTTPS by default; see [Phone transport](phone-https.md))
 - Accepts clients on RFC1918, link-local, and Tailscale ranges only
 - Public internet clients are rejected
 
@@ -29,18 +29,14 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 8. Tap the **Home** arrow (top-left) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel first.
 9. The footer shows the app version (e.g. v1.6.4) so you can confirm which build loaded.
 
-## Resumable uploads (plain HTTP)
+## Resumable uploads
 
-Phone tools use **HTTP** (not a secure context), so there is **no** service worker, Background Fetch, Background Sync, or screen Wake Lock.
+1. When you tap **Upload**, the phone copies **original** pictures plus shipment metadata into **IndexedDB** before any network upload starts.
+2. Pictures upload **one at a time** (or via **Background Fetch** on Android Chrome over HTTPS when the browser supports it). The desktop keeps a **partial batch** until **Cancel upload** or completion.
+3. If you leave the page, lose Wi‑Fi, or turn the screen off, the queue stays on the phone. Reopen **Freight Pictures** (shipment link, master link, or Connect hub) to see **Resuming upload: X of Y pictures**.
+4. Desktop shows **Upload in progress (X of Y)** until the batch finishes.
 
-What still works:
-
-1. When you tap **Upload**, the phone copies the **original** pictures plus shipment metadata into **IndexedDB** on the device before any network upload starts.
-2. Pictures upload **one at a time**. The desktop keeps a **partial batch** if the connection drops; it only clears that batch when you tap **Cancel upload** (same as before).
-3. If you leave the page, background the tab, turn the screen off, or lose Wi‑Fi, the queue stays on the phone. The next time you open **Freight Pictures** (shipment link, master link, or Connect hub **New shipment** entry), the app shows **Resuming upload: X of Y pictures** and continues automatically. While the page stays open, it also retries when the tab becomes visible again or the network comes back.
-4. The desktop shipment list shows **Upload in progress (X of Y)** until the batch finishes.
-
-**Honest limits on HTTP:** While the page is fully closed or the phone is asleep, the browser **pauses** active HTTP uploads. Nothing is lost—the queue on the phone and the partial batch on the desktop wait for you. Open Freight Pictures again to resume. **True** background uploading with the screen off would need HTTPS (secure context) plus Android Background Fetch; that can be added later if HTTPS returns.
+**HTTPS (default):** Background Fetch can continue uploads with the screen off on supported Android browsers. **HTTP fallback** (certificate not ready) behaves like plain HTTP: uploads pause when the page is closed or the phone is asleep; reopen to resume. IndexedDB resume works in both cases.
 
 ## Upload batch lock (1 minute)
 

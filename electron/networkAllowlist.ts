@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
+import { readTailscaleStatus } from './tls/tailscaleExec';
 
 export function isPrivateIP(ip: string): boolean {
   if (ip === '::1') return true;
@@ -16,19 +17,9 @@ export function isPrivateIP(ip: string): boolean {
   return false;
 }
 
-export async function detectTailscale(): Promise<{ address?: string; hostname?: string; error?: string }> {
-  try {
-    const { stdout } = await promisify(execFile)('tailscale', ['status', '--json'], { timeout: 3000 });
-    const status = JSON.parse(stdout);
-    if (!status.Self) return { error: 'Tailscale is not connected' };
-    const selfAddresses = status.Self.TailscaleIPs || [];
-    const ipv4 = selfAddresses.find((ip: string) => ip.includes('.'));
-    const hostname = status.Self.DNSName ? status.Self.DNSName.replace(/\.$/, '') : undefined;
-    return { address: ipv4, hostname };
-  } catch (e: any) {
-    if (e.code === 'ENOENT') return { error: 'Tailscale is not installed' };
-    return { error: 'Tailscale detection failed: ' + e.message };
-  }
+export async function detectTailscale(): Promise<{ address?: string; hostname?: string; certDomains?: string[]; error?: string }> {
+  const status = await readTailscaleStatus();
+  return status;
 }
 
 export function listPrivateIpv4Addresses(preferredAddress = ''): string[] {

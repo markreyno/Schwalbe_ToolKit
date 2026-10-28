@@ -4,6 +4,7 @@ import { ArrowLeft, Smartphone } from 'lucide-react';
 import type { ConnectPwaState } from '../../../shared/protocol';
 import { isPrivateIP } from '../../../shared/networkAllowlist';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
+import { PhoneTlsStatus } from '../../components/PhoneTlsStatus';
 
 export function ConnectPwaPage() {
   const [state, setState] = useState<ConnectPwaState>();
@@ -42,7 +43,7 @@ export function ConnectPwaPage() {
   }
 
   const tls = state?.phoneTls;
-  const httpMode = tls?.mode === 'http' || !tls?.phoneUseHttps;
+  const linksHttp = tls?.allowInsecureHttp ?? false;
 
   return <>
     <Link to="/" className="back-link"><ArrowLeft size={16}/> All tools</Link>
@@ -59,16 +60,18 @@ export function ConnectPwaPage() {
       <div>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-phone-hub" title="Phone hub server" defaultOpen>
           <p className="freight-muted">{state?.running ? `Hub server is running on port ${state.port}.` : 'Hub server is unavailable.'} Keep the toolkit open.</p>
-          <p className="freight-muted">Phone transport: {httpMode ? 'HTTP (default)' : tls?.usingTailscaleCert ? 'HTTPS · Tailscale certificate' : 'HTTPS · local desktop CA'}</p>
-          {tls && !httpMode && !tls.tlsReady && <p role="alert" className="freight-error">{tls.tlsError}</p>}
-          {tls && !httpMode && tls.tlsReady && tls.tlsError && <p role="alert" className="freight-error">{tls.tlsError}</p>}
+          <label>
+            <input type="checkbox" checked={tls?.phoneUseHttps ?? true} disabled={busy} onChange={e => void action('setPhoneUseHttps', { enabled: e.target.checked, usePhoneHttps: e.target.checked })} />
+            Use HTTPS for phone tools (recommended)
+          </label>
+          <PhoneTlsStatus tls={tls} />
+          {(tls?.tlsError || tls?.httpFallback) && (
+            <button type="button" disabled={busy} onClick={() => void action('retryPhoneCertificate')}>Retry certificate</button>
+          )}
           {state?.error && <p role="alert">{state.error}</p>}
-          {tls && !httpMode && tls.caFingerprint && !tls.usingTailscaleCert && <>
-            <p className="freight-muted">CA fingerprint (verify on phone): <code>{tls.caFingerprint}</code></p>
-            <p className="freight-muted">Trust URL (HTTP, CA only): <code>{tls.caTrustHttpUrl}</code></p>
-            {tls.caTrustQr && <img src={tls.caTrustQr} alt="Scan to trust desktop CA on your phone" style={{ maxWidth: 220 }}/>}
-          </>}
-          {httpMode && <p className="freight-muted">Phone tools use HTTP. PWA install, offline caching, and push notifications require HTTPS (disabled in this release). The hub and uploads work in the browser over HTTP.</p>}
+          {tls?.phoneUseHttps && !linksHttp && (
+            <p className="freight-muted">Service worker, installable PWA (<code>/install</code>), and Picker Water push require HTTPS and a trusted certificate.</p>
+          )}
         </CollapsibleSection>
         <CollapsibleSection storageKey="schwalbe-collapse-connect-reachability" title="Reachability">
           <p className="freight-muted">Freight Pictures (48731): {state?.reachability.freight ? 'responding' : 'not responding'}</p>
@@ -113,7 +116,7 @@ export function ConnectPwaPage() {
         <input aria-label="Phone hub link" readOnly value={url}/>
         <button disabled={!url} onClick={() => { void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(e => setError(String(e))); }}>{copied ? 'Link copied' : 'Copy link'}</button>
         <p className="freight-muted">
-          Hub links use {httpMode ? 'HTTP' : 'HTTPS'} on port {state?.port}.
+          Hub links use {linksHttp ? 'HTTP' : 'HTTPS'} on port {state?.port}.
           The QR opens the <strong>install</strong> page (<code>/install</code>); the warehouse hub stays free of install prompts.
         </p>
       </section>

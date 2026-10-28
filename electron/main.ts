@@ -60,6 +60,7 @@ app.whenReady().then(async () => {
   registerUpdates(() => mainWindow);
   const tlsManager = new PhoneTlsManager(app.getPath('userData'));
   await tlsManager.load();
+  tlsManager.startCertificateMaintenance();
   const caTrust = await startCaTrustServer(() => tlsManager.getCaPem());
   const freight = await registerFreight(() => mainWindow, tlsManager);
   const palletvision = await registerPalletVision(() => mainWindow, tlsManager);

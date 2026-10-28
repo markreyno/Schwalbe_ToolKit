@@ -28,7 +28,7 @@ async function openPalletVisionMobile(browser: import('@playwright/test').Browse
   await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
 
   const state = await page.evaluate(() => window.toolkit.palletvision('status'));
-  const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48732');
+  const local = (url: string) => url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48732');
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
 
   return { app, page, mobile, storage, local, qrUrl: local(state.qrUrl) };

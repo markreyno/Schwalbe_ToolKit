@@ -7,5 +7,6 @@ await copyFile('electron/palletvisionMobile.html', 'dist-electron/palletvisionMo
 await copyFile('electron/palletvisionMobile.js', 'dist-electron/palletvisionMobile.js');
 await copyFile('electron/phoneHubNav.js', 'dist-electron/phoneHubNav.js');
 await copyFile('electron/freightUploadQueue.js', 'dist-electron/freightUploadQueue.js');
+await copyFile('electron/freightSw.js', 'dist-electron/freightSw.js');
 await copyFile('electron/freightMobileInline.js', 'dist-electron/freightMobileInline.js');
 await cp('electron/connectPwa', 'dist-electron/connectPwa', { recursive: true });
