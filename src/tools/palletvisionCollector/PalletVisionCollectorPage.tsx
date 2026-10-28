@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Video, FolderOpen, Edit2, X } from 'lucide-react';
 import type { PalletVisionState } from '../../../shared/protocol';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
+import { PhoneTlsStatus } from '../../components/PhoneTlsStatus';
 
 export function PalletVisionCollectorPage() {
   const [state, setState] = useState<PalletVisionState>();
@@ -131,6 +132,8 @@ export function PalletVisionCollectorPage() {
             <button disabled={busy || !state?.root} onClick={() => void startImport()} style={{ flex: 1, background: '#0d7aa3' }}><Video size={16}/> Import video file</button>
           </div>
           <p className="freight-muted">{state?.running ? 'Upload server is running on port 48732.' : 'Upload server is unavailable.'} Keep the toolkit open.</p>
+          <PhoneTlsStatus tls={state?.phoneTls} />
+          {(state?.phoneTls?.tlsError || state?.phoneTls?.httpFallback) && <button type="button" disabled={busy} onClick={() => void action('retryPhoneCertificate')}>Retry certificate</button>}
           {state?.error && <p role="alert">{state.error}</p>}
           {state?.events?.length ? <div style={{ marginTop: '12px', fontSize: '11px', color: '#7b8694' }}>
             <p style={{ fontWeight: 600, marginBottom: '6px' }}>Activity log</p>

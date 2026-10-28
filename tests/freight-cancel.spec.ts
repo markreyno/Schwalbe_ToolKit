@@ -34,7 +34,7 @@ test('cancel upload removes partial files and releases the batch lock immediatel
 
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'Cancel Test Co')!;
-    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731');
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await mobile.goto(localUrl);
 
@@ -111,7 +111,7 @@ test('batch lock expires after FREIGHT_BATCH_TTL_MS', async ({ request }) => {
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'TTL Test Co')!;
     const api = (route: string) =>
-      shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731').replace('/?', route + '&');
+      shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731').replace('/?', route + '&');
     const bytes = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=',
       'base64',
@@ -128,7 +128,7 @@ test('batch lock expires after FREIGHT_BATCH_TTL_MS', async ({ request }) => {
     expect((await resumed.json()).resumed).toBe(true);
 
     const pictureHash = createHash('sha256').update(bytes).digest('hex');
-    const fileUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731').replace('/?', `/file?batch=${firstBody.id}&index=0&`);
+    const fileUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731').replace('/?', `/file?batch=${firstBody.id}&index=0&`);
     const uploaded = await request.post(fileUrl, {
       headers: { 'Content-Type': 'application/octet-stream', 'X-Picture-SHA256': pictureHash },
       data: bytes,

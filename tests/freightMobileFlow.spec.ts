@@ -102,7 +102,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
 
       const pvMobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
       const pvState = await page.evaluate(() => window.toolkit.palletvision('status'));
-      await pvMobile.goto(pvState.qrUrl.replace(/^https?:\/\/[^/]+/, `http://127.0.0.1:48732`));
+      await pvMobile.goto(pvState.qrUrl.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:48732`));
       await pvMobile.waitForSelector('.phone-home-link');
       await pvMobile.locator('header.brand-bar').screenshot({ path: path.join(pvArtifactDir, 'palletvision-phone-header.png') });
       await pvMobile.close();

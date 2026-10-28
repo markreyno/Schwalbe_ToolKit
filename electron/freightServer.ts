@@ -18,6 +18,7 @@ export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0
 
 const phoneHubNavJs = () => readFileSync(path.join(__dirname, 'phoneHubNav.js'), 'utf8');
 const freightUploadQueueJs = () => readFileSync(path.join(__dirname, 'freightUploadQueue.js'), 'utf8');
+const freightSwJs = () => readFileSync(path.join(__dirname, 'freightSw.js'), 'utf8');
 const freightMobileInlineJs = () => readFileSync(path.join(__dirname, 'freightMobileInline.js'), 'utf8');
 let freightAppVersion: string | undefined;
 function freightAppVersionLabel(): string {
@@ -307,6 +308,11 @@ export class FreightServer {
     if (req.method === 'GET' && url.pathname === '/freightUploadQueue.js') {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(freightUploadQueueJs());
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/freight-sw.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(freightSwJs());
       return;
     }
     if (req.method === 'GET' && url.pathname === '/freightMobileInline.js') {

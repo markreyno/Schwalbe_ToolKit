@@ -296,6 +296,39 @@ async function drainUploadQueue(resuming) {
   el('progress').max = total;
   el('progress').value = uploaded / total;
   if (!batch) await ensureBatchOnServer(pending);
+  if (window.isSecureContext && 'serviceWorker' in navigator && pending.uploadedIndices.length === 0) {
+    try {
+      await navigator.serviceWorker.register('/freight-sw.js', { scope: '/' });
+      const reg = await navigator.serviceWorker.ready;
+      if (reg.backgroundFetch) {
+        const requests = pending.files.map((f, i) => new Request('/file?batch=' + batch.id + '&index=' + i + '&key=' + encodeURIComponent(key), {
+          method: 'POST',
+          headers: { 'X-Picture-SHA256': f.hash },
+          body: f.blob
+        }));
+        const bg = await reg.backgroundFetch.fetch('freight-' + batch.id, requests, {
+          title: 'Freight picture upload',
+          downloadTotal: pending.files.reduce((n, f) => n + (f.size || 0), 0)
+        });
+        await new Promise((resolve, reject) => {
+          const onSuccess = () => { cleanup(); resolve(); };
+          const onFail = () => { cleanup(); reject(new Error('Background upload failed. Retry with the screen on.')); };
+          const cleanup = () => {
+            bg.removeEventListener('backgroundfetchsuccess', onSuccess);
+            bg.removeEventListener('backgroundfetchfail', onFail);
+          };
+          bg.addEventListener('backgroundfetchsuccess', onSuccess);
+          bg.addEventListener('backgroundfetchfail', onFail);
+        });
+        for (let i = 0; i < pending.files.length; i++) await Q.markIndexUploaded(i);
+        batch = null;
+        await Q.clearPending();
+        setPhase('done');
+        message('Complete: ' + total + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
+        return;
+      }
+    } catch { /* foreground upload */ }
+  }
   for (let i = 0; i < pending.files.length; i++) {
     if (uploadCanceled) break;
     if (pending.uploadedIndices.includes(i)) continue;

@@ -55,7 +55,7 @@ test('close page mid-upload then reopen and finish without duplicates', async ({
 
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'Resume Close Co')!;
-    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731');
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     let fileAttempts = 0;
@@ -91,7 +91,7 @@ test('offline mid-upload then online resumes', async ({ browser }) => {
 
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'Resume Offline Co')!;
-    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731');
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     let fileAttempts = 0;
@@ -126,7 +126,7 @@ test('cancel during resume deletes the batch', async ({ browser }) => {
 
     const state = await page.evaluate(() => window.toolkit.freight('status'));
     const shipment = state.shipments.find(s => s.company === 'Resume Cancel Co')!;
-    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'http://127.0.0.1:48731');
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     let fileAttempts = 0;
