@@ -452,16 +452,23 @@ export class FreightServer {
           json({ saved: true, duplicate: true });
           return;
         }
-        if (clientAborted || req.aborted) return;
+        if (clientAborted || req.aborted) {
+          if (!res.headersSent) res.end();
+          return;
+        }
         if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
         try { validateFreightImage(bytes, f.name); } catch (e) { throw e; }
         f.hash = expectedHash;
         if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${path.extname(f.name).toLowerCase()}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
         json({ saved: true });
       } catch (e) {
-        if (clientAborted || req.aborted) return;
+        if (clientAborted || req.aborted) {
+          if (!res.headersSent) res.end();
+          return;
+        }
         throw e;
-      } finally { this.writing = false; } return;
+      } finally { this.writing = false; }
+      return;
     }
     if (req.method === 'POST' && url.pathname === '/finish') {
       if (this.writing) throw new Error('Wait for the current picture to save.');
