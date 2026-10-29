@@ -20,12 +20,12 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 ## Phone usage
 
 1. Scan the shipment QR, master QR, or paste the link.
-2. **Edit** company/date on the header, or use **Back / New shipment** to start a new shipment without a new QR.
+2. Use **Back / New shipment** to start a new shipment without a new QR. Company and date on an open shipment are set on the **desktop** only.
 3. The page shows **Saving to:** with the desktop subfolder choice (read-only on the phone).
 4. Add up to **26 pictures** per upload batch.
 5. Enter the pallet count, check the confirmation box, then tap **Upload All**.
 6. Confirm on **Ready to upload?** with **Upload** or **Cancel**.
-7. During upload use **Back** or **Cancel upload** as needed. While pictures are uploading you will see: **You can leave this page. Uploads continue when you come back to Freight Pictures.**
+7. During upload use **Back** or **Cancel upload** as needed. While pictures are uploading you will see guidance about background upload on Android Chrome (installed PWA).
 8. Tap the **Home** arrow (top-left) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel first.
 9. The footer shows the app version (e.g. v1.6.4) so you can confirm which build loaded.
 
@@ -36,7 +36,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 3. If you leave the page, lose Wi‑Fi, or turn the screen off, the queue stays on the phone. Reopen **Freight Pictures** (shipment link, master link, or Connect hub) to see **Resuming upload: X of Y pictures**.
 4. Desktop shows **Upload in progress (X of Y)** until the batch finishes.
 
-**HTTPS (default):** Background Fetch can continue uploads with the screen off on supported Android browsers. **HTTP fallback** (certificate not ready) behaves like plain HTTP: uploads pause when the page is closed or the phone is asleep; reopen to resume. IndexedDB resume works in both cases.
+**HTTPS only:** Phone Freight requires a working desktop certificate. There is no HTTP fallback on port 48731. Background Fetch (Android Chrome) needs HTTPS and a trusted cert. IndexedDB resume still works if you reopen the shipment link after an interruption.
 
 ## Upload batch lock (1 minute)
 
@@ -55,7 +55,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 - Allow the toolkit on **Windows Firewall** (private network).
 - Guest Wi‑Fi that blocks device-to-device traffic will fail; use LAN or Tailscale.
 - Cross-subnet/VLAN works when routing allows private traffic between subnets.
-- If QR fails, copy/paste the link or type `http://<desktop-host>:48731/` manually.
+- If QR fails, copy/paste the **https://** link from the desktop or open Freight from the Connect hub after HTTPS is ready.
 
 ## Tailscale
 

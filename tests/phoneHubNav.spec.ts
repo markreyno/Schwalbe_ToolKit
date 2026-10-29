@@ -70,7 +70,7 @@ test.describe('Phone hub home navigation', () => {
       await page.goto(`http://127.0.0.1:${PHONE_CA_TRUST_PORT}/`);
       const home = page.getByRole('link', { name: 'Home', exact: true });
       await expect(home).toBeVisible();
-      await expect(home).toHaveAttribute('href', `http://127.0.0.1:${CONNECT_PWA_PORT}/`);
+      await expect(home).toHaveAttribute('href', `https://127.0.0.1:${CONNECT_PWA_PORT}/`);
     } finally {
       await handle.close();
     }

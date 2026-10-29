@@ -13,8 +13,16 @@ function isIos() {
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
+}
+
 function markInstalled() {
   try { localStorage.setItem(INSTALLED_KEY, '1'); } catch { /* private mode */ }
+}
+
+function clearInstalledFlag() {
+  try { localStorage.removeItem(INSTALLED_KEY); } catch { /* ignore */ }
 }
 
 async function detectInstalled() {
@@ -30,8 +38,31 @@ async function detectInstalled() {
   return false;
 }
 
+/** Android Chrome may report “installed” after the user deleted the PWA. */
+async function detectGhostInstall() {
+  if (isStandalone() || isIos()) return false;
+  if (!isAndroid()) return false;
+  const flagged = await detectInstalled();
+  if (!flagged) return false;
+  if (deferredPrompt) return false;
+  if (navigator.getInstalledRelatedApps) {
+    try {
+      const apps = await navigator.getInstalledRelatedApps();
+      if (apps && apps.length > 0) return false;
+    } catch { /* treat as ghost when API missing */ }
+  }
+  return true;
+}
+
+function showGhostInstallPanel() {
+  document.getElementById('install-panel').hidden = true;
+  document.getElementById('installed-panel').hidden = true;
+  document.getElementById('ghost-install-panel').hidden = false;
+}
+
 function showInstalledPanel({ ios }) {
   document.getElementById('install-panel').hidden = true;
+  document.getElementById('ghost-install-panel').hidden = true;
   const panel = document.getElementById('installed-panel');
   panel.hidden = false;
   const msg = document.getElementById('installed-message');
@@ -47,20 +78,28 @@ function showInstalledPanel({ ios }) {
     msg.textContent = 'Schwalbe ToolKit is on this device. Open the warehouse tools hub.';
     openBtn.hidden = false;
     openLink.hidden = false;
-    openBtn.onclick = () => { window.location.href = '/'; };
+    openBtn.onclick = () => {
+      window.location.href = '/';
+      if (isAndroid()) {
+        window.setTimeout(() => {
+          if (!document.hidden) showGhostInstallPanel();
+        }, 2500);
+      }
+    };
   }
 }
 
 function showInstallPanel() {
   document.getElementById('installed-panel').hidden = true;
+  document.getElementById('ghost-install-panel').hidden = true;
   document.getElementById('install-panel').hidden = false;
   const ios = isIos();
   document.getElementById('ios-install').hidden = !ios;
   document.getElementById('android-install').hidden = ios;
   document.getElementById('generic-install').hidden = ios;
   if (!ios) document.getElementById('generic-install').hidden = false;
-  const httpNote = document.getElementById('http-install-note');
-  if (httpNote) httpNote.hidden = window.isSecureContext;
+  const httpsNote = document.getElementById('https-install-note');
+  if (httpsNote) httpsNote.hidden = window.isSecureContext;
 }
 
 let deferredPrompt = null;
@@ -79,6 +118,11 @@ document.getElementById('android-install-button')?.addEventListener('click', asy
   document.getElementById('android-install-button').hidden = true;
 });
 
+document.getElementById('ghost-retry-install')?.addEventListener('click', () => {
+  clearInstalledFlag();
+  showInstallPanel();
+});
+
 window.addEventListener('appinstalled', () => {
   markInstalled();
   void refreshUi();
@@ -87,6 +131,10 @@ window.addEventListener('appinstalled', () => {
 async function refreshUi() {
   if (isStandalone()) {
     window.location.replace('/');
+    return;
+  }
+  if (await detectGhostInstall()) {
+    showGhostInstallPanel();
     return;
   }
   const installed = await detectInstalled();

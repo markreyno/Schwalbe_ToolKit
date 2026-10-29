@@ -218,7 +218,7 @@ export class FreightServer {
       return false;
     }
   }
-  /** Phone or desktop: rename empty shipment folder, or create a new shipment if pictures/files already exist. */
+  /** Rename empty shipment folder, or create a new shipment if pictures/files already exist (desktop-only; phone API disabled). */
   async updateShipmentFromPhone(shipment: Shipment, company: string, date: string) {
     if (shipment.closed) throw new Error('This shipment is complete. Start a new shipment instead.');
     if (this.batch && this.batch.shipment === shipment && this.batchHasUnfinishedFiles()) {
@@ -386,9 +386,9 @@ export class FreightServer {
       json({ key: s.token, company: s.company, date: s.date });
       return;
     }
-    if (req.method === 'POST' && url.pathname === '/shipment/update' && shipment) {
-      const data = JSON.parse((await this.body(req, 4096)).toString());
-      json(await this.updateShipmentFromPhone(shipment, data.company, data.date));
+    if (req.method === 'POST' && url.pathname === '/shipment/update') {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: 'Rename shipments on the desktop toolkit only.' }));
       return;
     }
     if (!shipment || shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');

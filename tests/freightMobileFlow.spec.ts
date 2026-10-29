@@ -33,7 +33,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
   test('confirm step, desktop subfolder, back from upload (dist-electron HTTPS)', async ({ browser }) => {
     const builtPage = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
     expect(builtPage).toContain('saving-to');
-    expect(builtPage).toContain('edit-shipment');
+    expect(builtPage).not.toContain('edit-shipment');
     expect(builtPage).not.toContain('start-over');
 
     const profile = path.resolve('.cache/freight-mobile-flow', randomUUID());
@@ -73,7 +73,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       await mobile.waitForSelector('.phone-home-link');
       await expect(mobile.locator('#app-version')).toContainText(/^v\d+\.\d+\.\d+$/);
       await expect(mobile.locator('#saving-to')).toContainText('Saving to:');
-      await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
+      await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
       await mobile.screenshot({ path: path.join(artifactDir, '01-first-screen.png'), fullPage: true });
 
       await mobile.locator('#files').setInputFiles([{ name: 'a.png', mimeType: 'image/png', buffer: PNG }]);

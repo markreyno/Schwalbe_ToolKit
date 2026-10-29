@@ -13,11 +13,12 @@ export type PhoneTlsPublicStatus = {
   tlsError: string;
   tlsFixHint: string;
   transport: string;
-  /** @deprecated Use phoneUseHttps — true when plain HTTP mode is active for URLs/servers */
+  /** @deprecated Always false — phone tools are HTTPS-only */
   allowInsecureHttp: boolean;
   phoneUseHttps: boolean;
+  /** @deprecated Always false — no silent HTTP downgrade */
   httpFallback: boolean;
-  mode: 'tailscale' | 'local' | 'insecure' | 'http' | 'http-fallback' | 'pending';
+  mode: 'tailscale' | 'local' | 'pending' | 'unavailable';
   caFingerprint: string;
   caTrustHttpUrl: string;
   caTrustQr: string;
@@ -46,10 +47,6 @@ const RETRY_MS = 5 * 60 * 1000;
 
 export class PhoneTlsManager {
   private settingsPath: string;
-  /** User preference: HTTPS for phone tools (default on). */
-  private usePhoneHttps = true;
-  /** True when HTTPS is desired but no cert is available — serve and link HTTP until fixed. */
-  private httpFallbackActive = false;
   private tlsError = '';
   private localCaPem: string | null = null;
   private localFingerprint = '';
@@ -62,6 +59,7 @@ export class PhoneTlsManager {
   private lastRefreshOpts = { useTailscale: false, hosts: [] as string[] };
   private maintenanceTimer?: ReturnType<typeof setInterval>;
   private retryTimer?: ReturnType<typeof setInterval>;
+  private hadTlsReady = false;
 
   constructor(userDataDir: string) {
     this.settingsPath = path.join(userDataDir, 'phone-tls-settings.json');
@@ -72,22 +70,13 @@ export class PhoneTlsManager {
   }
 
   async load() {
-    let parsed: Settings = {};
     try {
-      parsed = JSON.parse(await fs.readFile(this.settingsPath, 'utf8'));
+      JSON.parse(await fs.readFile(this.settingsPath, 'utf8'));
     } catch (e: any) {
       if (e.code !== 'ENOENT') this.tlsError = 'Could not read phone TLS settings.';
     }
-    if (parsed.usePhoneHttps === undefined && parsed.allowInsecureHttp !== undefined) {
-      this.usePhoneHttps = !parsed.allowInsecureHttp;
-    } else if (parsed.usePhoneHttps === undefined) {
-      this.usePhoneHttps = true;
-    } else {
-      this.usePhoneHttps = !!parsed.usePhoneHttps;
-    }
-    this.httpFallbackActive = false;
     await fs.mkdir(path.dirname(this.settingsPath), { recursive: true });
-    await fs.writeFile(this.settingsPath, JSON.stringify({ usePhoneHttps: this.usePhoneHttps }));
+    await fs.writeFile(this.settingsPath, JSON.stringify({ usePhoneHttps: true }));
   }
 
   startCertificateMaintenance() {
@@ -96,38 +85,37 @@ export class PhoneTlsManager {
       void this.maintainCertificates();
     }, MAINTENANCE_MS);
     this.retryTimer = setInterval(() => {
-      if (this.usePhoneHttps && (this.httpFallbackActive || this.tlsError)) void this.maintainCertificates();
+      if (this.tlsError || !this.getServerTls()) void this.maintainCertificates();
     }, RETRY_MS);
   }
 
   getPhoneUseHttps() {
-    return this.usePhoneHttps;
+    return true;
   }
 
-  /** True when phone servers and public URLs should use HTTP. */
+  /** Phone tool URLs and listeners always use HTTPS. */
   getPhoneHttpMode() {
-    return !this.usePhoneHttps || this.httpFallbackActive;
+    return false;
   }
 
   isHttpFallback() {
-    return this.httpFallbackActive;
+    return false;
   }
 
-  async setPhoneUseHttps(enabled: boolean) {
-    this.usePhoneHttps = !!enabled;
+  async setPhoneUseHttps(_enabled: boolean) {
     await fs.mkdir(path.dirname(this.settingsPath), { recursive: true });
-    await fs.writeFile(this.settingsPath, JSON.stringify({ usePhoneHttps: this.usePhoneHttps }));
+    await fs.writeFile(this.settingsPath, JSON.stringify({ usePhoneHttps: true }));
     await this.maintainCertificates(true);
     await this.notifyReload();
   }
 
-  /** @deprecated Prefer setPhoneUseHttps(!enabled) */
-  async setAllowInsecureHttp(enabled: boolean) {
-    await this.setPhoneUseHttps(!enabled);
+  /** @deprecated Phone tools no longer support plain HTTP. */
+  async setAllowInsecureHttp(_enabled: boolean) {
+    await this.setPhoneUseHttps(true);
   }
 
   getAllowInsecureHttp() {
-    return this.getPhoneHttpMode();
+    return false;
   }
 
   async retryCertificate() {
@@ -140,7 +128,6 @@ export class PhoneTlsManager {
   }
 
   getServerTls(): PhoneServerTls | null {
-    if (this.getPhoneHttpMode()) return null;
     if (testTlsOverride) return testTlsOverride;
     return this.serverTls;
   }
@@ -156,9 +143,9 @@ export class PhoneTlsManager {
   }
 
   async maintainCertificates(forceRenew = false) {
+    const wasReady = !!this.getServerTls();
     await this.refreshServerTls(this.lastRefreshOpts.useTailscale, this.lastRefreshOpts.hosts, forceRenew);
-    const wasFallback = this.httpFallbackActive;
-    if (wasFallback && !this.httpFallbackActive && this.usePhoneHttps) await this.notifyReload();
+    if (!wasReady && this.getServerTls()) await this.notifyReload();
   }
 
   async refreshServerTls(useTailscale: boolean, extraHosts: string[] = [], forceTailscaleRenew = false) {
@@ -168,18 +155,10 @@ export class PhoneTlsManager {
     this.usingTailscaleCert = false;
     this.tailscaleCertHostname = '';
     this.tailscaleCertExpiresAt = '';
-
-    if (!this.usePhoneHttps) {
-      this.httpFallbackActive = false;
-      this.lastMode = 'http';
-      return;
-    }
-
     this.lastMode = 'pending';
 
     if (testTlsOverride) {
       this.serverTls = testTlsOverride;
-      this.httpFallbackActive = false;
       this.lastMode = 'local';
       return;
     }
@@ -218,20 +197,17 @@ export class PhoneTlsManager {
     if (tailscaleTls && localTls) {
       this.serverTls = this.buildSniBundle(localTls, tailscaleTls);
       this.lastMode = 'tailscale';
-      this.httpFallbackActive = false;
     } else if (localTls) {
       this.serverTls = localTls;
       this.lastMode = 'local';
-      this.httpFallbackActive = false;
     } else if (tailscaleTls) {
       this.serverTls = tailscaleTls;
       this.lastMode = 'tailscale';
-      this.httpFallbackActive = false;
     } else {
-      this.httpFallbackActive = true;
-      this.lastMode = 'http-fallback';
-      if (!this.tlsError) this.tlsError = 'HTTPS certificate is not ready.';
+      this.lastMode = 'unavailable';
+      if (!this.tlsError) this.tlsError = 'HTTPS certificate is not ready. Phone tools stay offline until a certificate works.';
     }
+    this.hadTlsReady = !!this.serverTls;
   }
 
   private async notifyReload() {
@@ -243,19 +219,17 @@ export class PhoneTlsManager {
       'In the Tailscale admin console, enable MagicDNS and HTTPS Certificates (DNS settings).',
       'Sign in to Tailscale on this PC and confirm `tailscale status` shows your machine.',
       tailscaleError ? `Then run: tailscale cert ${this.tailscaleCertHostname || '<your-magicdns-name>'}` : '',
-      'Use Retry certificate on this page after fixing Tailscale.'
+      'For local network mode, install the desktop CA from the trust page (port 48730), then use Retry certificate here.'
     ]
       .filter(Boolean)
       .join(' ');
   }
 
   transportLabel(mode: PhoneTlsPublicStatus['mode'], tlsReady: boolean): string {
-    if (!this.usePhoneHttps) return 'HTTP (phone HTTPS disabled)';
-    if (mode === 'http-fallback') return 'HTTP fallback (certificate not ready)';
-    if (!tlsReady) return 'HTTPS (pending certificate)';
+    if (!tlsReady) return 'HTTPS unavailable (certificate not ready)';
     if (mode === 'tailscale') return 'HTTPS · Tailscale certificate';
     if (mode === 'local') return 'HTTPS · local CA';
-    return 'HTTP';
+    return 'HTTPS';
   }
 
   async publicStatus(
@@ -269,41 +243,15 @@ export class PhoneTlsManager {
       : primaryLanHost;
     const hubPort = options?.hubPort || 48734;
     const installPath = options?.installPath || '/install';
-    const urlInsecure = this.getPhoneHttpMode();
-    const installUrl = buildPhoneOrigin(trustHost, hubPort, urlInsecure) + installPath;
-    const caTrustHttpUrl = `http://${trustHost}:${PHONE_CA_TRUST_PORT}/?next=${encodeURIComponent(buildPhoneOrigin(trustHost, hubPort, false) + installPath)}`;
+    const installUrl = buildPhoneOrigin(trustHost, hubPort, false) + installPath;
+    const caTrustHttpUrl = `http://${trustHost}:${PHONE_CA_TRUST_PORT}/?next=${encodeURIComponent(installUrl)}`;
     let caTrustQr = '';
     try {
       caTrustQr = await QRCode.toDataURL(caTrustHttpUrl);
     } catch { /* ignore */ }
 
-    if (!this.usePhoneHttps) {
-      return {
-        tlsReady: true,
-        tlsError: '',
-        tlsFixHint: '',
-        transport: this.transportLabel('http', true),
-        allowInsecureHttp: true,
-        phoneUseHttps: false,
-        httpFallback: false,
-        mode: 'http',
-        caFingerprint: '',
-        caTrustHttpUrl,
-        caTrustQr,
-        usingTailscaleCert: false,
-        tlsHostname: trustHost,
-        tailscaleCertHostname: '',
-        leafSans: [],
-        leafExpiresAt: '',
-        tailscaleCertExpiresAt: '',
-        sanCoversHostname: true,
-        requiresCaTrust: false,
-        installHttpsUrl: installUrl
-      };
-    }
-
     const tlsReady = !!this.getServerTls();
-    const mode = this.lastMode;
+    const mode = tlsReady ? this.lastMode : this.lastMode === 'unavailable' ? 'unavailable' : 'pending';
     const certPem = this.serverTls?.sniCert
       ? String(this.serverTls.sniCert)
       : this.serverTls?.cert
@@ -329,22 +277,22 @@ export class PhoneTlsManager {
     }
     const requiresCaTrust = !this.usingTailscaleCert && mode === 'local';
     let tlsError = this.tlsError;
-    if (this.httpFallbackActive) {
-      tlsError = tlsError || 'HTTPS certificate is not ready. Phone links use HTTP until the certificate works.';
-    } else if (tlsReady && !sanCoversHostname) {
+    if (tlsReady && !sanCoversHostname) {
       tlsError = `Certificate does not list ${trustHost} in its names (SAN). Phones will show a TLS error until the cert is regenerated for this address.`;
-    } else if (!tlsReady && !this.httpFallbackActive) {
-      tlsError = tlsError || 'HTTPS certificate is not ready.';
+    } else if (!tlsReady) {
+      tlsError =
+        tlsError ||
+        'HTTPS certificate is not ready. Phone tools on ports 48731–48734 are offline (no HTTP fallback).';
     }
-    const fixHint = this.httpFallbackActive || tlsError ? this.tlsFixHint(tailscale.error) : '';
+    const fixHint = tlsError ? this.tlsFixHint(tailscale.error) : '';
     return {
-      tlsReady: tlsReady || this.httpFallbackActive,
+      tlsReady,
       tlsError,
       tlsFixHint: fixHint,
       transport: this.transportLabel(mode, tlsReady),
-      allowInsecureHttp: urlInsecure,
+      allowInsecureHttp: false,
       phoneUseHttps: true,
-      httpFallback: this.httpFallbackActive,
+      httpFallback: false,
       mode,
       caFingerprint: this.localFingerprint,
       caTrustHttpUrl,
@@ -362,6 +310,6 @@ export class PhoneTlsManager {
   }
 
   buildToolBaseUrl(host: string, port: number): string {
-    return buildPhoneOrigin(host, port, this.getPhoneHttpMode());
+    return buildPhoneOrigin(host, port, false);
   }
 }

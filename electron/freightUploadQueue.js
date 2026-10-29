@@ -1,5 +1,5 @@
 /**
- * Persistent freight picture upload queue (IndexedDB). Works on plain HTTP.
+ * Persistent freight picture upload queue (IndexedDB). Requires HTTPS for Background Fetch; queue resume works over HTTPS.
  * Exposes window.FreightUploadQueue.
  */
 (function (global) {
@@ -18,13 +18,36 @@
     });
   }
 
+  function mimeForName(name) {
+    const lower = (name || '').toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    return 'application/octet-stream';
+  }
+
+  function materializeFile(entry) {
+    if (!entry) return entry;
+    if (entry.blob instanceof Blob && entry.blob.size > 0) return entry;
+    if (entry.data) {
+      const blob = new Blob([entry.data], { type: entry.mimeType || mimeForName(entry.name) });
+      return { ...entry, blob };
+    }
+    if (entry.blob instanceof Blob) return entry;
+    return { ...entry, blob: null };
+  }
+
   async function getPending() {
     try {
       const db = await openDb();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readonly');
         const req = tx.objectStore(STORE).get('active');
-        req.onsuccess = () => resolve(req.result || null);
+        req.onsuccess = () => {
+          const record = req.result || null;
+          if (record?.files) record.files = record.files.map(materializeFile);
+          resolve(record);
+        };
         req.onerror = () => reject(req.error);
       });
     } catch {
@@ -33,10 +56,24 @@
   }
 
   async function savePending(record) {
+    const files = [];
+    for (const f of record.files || []) {
+      const copy = {
+        index: f.index,
+        name: f.name,
+        size: f.size,
+        hash: f.hash,
+        mimeType: f.mimeType || mimeForName(f.name)
+      };
+      if (f.data instanceof ArrayBuffer) copy.data = f.data;
+      else if (f.data && ArrayBuffer.isView(f.data)) copy.data = f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength);
+      else if (f.blob instanceof Blob) copy.data = await f.blob.arrayBuffer();
+      files.push(copy);
+    }
     const db = await openDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ ...record, id: 'active' });
+      tx.objectStore(STORE).put({ ...record, files, id: 'active' });
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -54,10 +91,6 @@
     } catch { /* ignore */ }
   }
 
-  async function blobFromFile(file) {
-    return file instanceof Blob ? file : new Blob([file]);
-  }
-
   /**
    * @param {object} input
    * @param {string} input.shipmentKey
@@ -70,12 +103,15 @@
     for (let i = 0; i < input.files.length; i++) {
       const file = input.files[i];
       const hash = await input.hashFile(file);
+      const data = await file.arrayBuffer();
       files.push({
         index: i,
         name: file.name,
         size: file.size,
         hash,
-        blob: await blobFromFile(file)
+        mimeType: file.type || mimeForName(file.name),
+        data,
+        blob: new Blob([data], { type: file.type || mimeForName(file.name) })
       });
     }
     const record = {
@@ -88,7 +124,12 @@
       createdAt: Date.now()
     };
     await savePending(record);
-    return record;
+    return materializeRecord(record);
+  }
+
+  function materializeRecord(record) {
+    if (!record) return record;
+    return { ...record, files: (record.files || []).map(materializeFile) };
   }
 
   async function markIndexUploaded(index) {
@@ -106,9 +147,19 @@
   }
 
   function pendingProgress(pending) {
+    const total = Math.max(0, pending?.files?.length || 0);
+    const uploaded = Math.min(total, pending?.uploadedIndices?.length || 0);
+    return { total, uploaded, remaining: Math.max(0, total - uploaded) };
+  }
+
+  function remainingIndices(pending) {
+    const out = [];
     const total = pending?.files?.length || 0;
-    const uploaded = pending?.uploadedIndices?.length || 0;
-    return { total, uploaded, remaining: total - uploaded };
+    const done = pending?.uploadedIndices || [];
+    for (let i = 0; i < total; i++) {
+      if (!done.includes(i)) out.push(i);
+    }
+    return out;
   }
 
   global.FreightUploadQueue = {
@@ -118,6 +169,8 @@
     createFromSelection,
     markIndexUploaded,
     setBatchId,
-    pendingProgress
+    pendingProgress,
+    remainingIndices,
+    materializeFile
   };
 })(typeof window !== 'undefined' ? window : globalThis);

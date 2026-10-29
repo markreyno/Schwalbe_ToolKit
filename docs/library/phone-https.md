@@ -1,47 +1,42 @@
-# Phone transport (HTTPS default)
+# Phone HTTPS
 
-Freight Pictures (**48731**), PalletVision Data Collector (**48732**), and Connect PWA (**48734**) use **HTTPS by default** on those ports. QR codes, hub tiles, copy links, and the home arrow use `https://` unless the desktop is in **HTTP fallback** (certificate not ready) or you turn off **Use HTTPS for phone tools**.
+Freight Pictures (**48731**), PalletVision Data Collector (**48732**), and Connect PWA (**48734**) are **HTTPS-only** on those ports. QR codes, hub tiles, copy links, and the home arrow always use `https://`.
 
-## Default: HTTPS
+There is **no HTTP fallback** on the tool ports. If the desktop certificate is not ready, phone servers stay **offline** and the desktop shows a clear error with **Retry certificate** — phones are never quietly downgraded to HTTP.
 
-- Secure context on the phone: **service worker**, **Install app** (`/install`), Picker Water **push** (installed app), and Freight **Background Fetch** (Android Chrome) when available.
-- **Tailscale MagicDNS** (`*.ts.net`): the toolkit obtains a **Tailscale certificate** (`tailscale cert <name>`) and serves it for `*.ts.net` hostnames on **all three ports**, even when a tool is in **Local network** mode. LAN IP links use the **local desktop CA** leaf (SNI selects the right cert).
-- **Local network** mode: install the desktop CA once via the trust page on port **48730** (`http://<desktop>:48730/`).
+## Certificates
 
-On Windows the app looks for `tailscale.exe` at `C:\Program Files\Tailscale\tailscale.exe` and on PATH. MagicDNS name comes from `tailscale status --json` (`Self.DNSName`, trailing dot stripped).
+- **Tailscale** mode: MagicDNS name + Tailscale-issued cert (SNI on `*.ts.net` for phone ports).
+- **Local network** mode: desktop **local CA** covers LAN IP/hostname on the phone ports. Phones trust the CA once via the bootstrap page below.
 
-## HTTP fallback (never leave the phone broken)
+## Bootstrap HTTP (port 48730 only)
 
-If HTTPS is enabled but **no certificate** can be loaded (Tailscale cert failure and local CA failure), the desktop:
+The **CA trust** server on port **48730** is the only intentional HTTP surface. It serves:
 
-1. Shows the **exact error** and fix steps on Connect PWA, Freight, and PalletVision (enable **HTTPS Certificates** + MagicDNS in Tailscale admin, sign in, `tailscale cert <name>`).
-2. Serves **HTTP** on 48731–48734 and labels links **HTTP fallback** until a certificate works.
-3. **Automatically switches back to HTTPS** when a certificate is obtained (retry every few minutes, daily renewal check, **Retry certificate** button).
+- `/ca.crt` and iOS profile for one-time CA install
+- Short instructions (no tool UI)
 
-Uncheck **Use HTTPS for phone tools** on Connect PWA to stay on plain HTTP intentionally.
+URL shape: `http://<desktop>:48730/?next=<https-install-url>`
 
-## Tailscale checklist (Mark-style setup)
+After the CA is trusted, use **HTTPS** links on 48731–48734. The trust page **Home** link points at `https://<desktop>:48734/`.
 
-1. Tailscale admin → **DNS** → enable **MagicDNS** and **HTTPS Certificates**.
-2. PC and phone on the same tailnet, signed in.
-3. Desktop Connect PWA → **Tailscale** network mode; confirm hostname like `…sh.tailbbbe79.ts.net`.
-4. Scan the hub QR (`https://…:48734/install` or hub URL).
-5. If the desktop shows a cert error, click **Retry certificate** after fixing Tailscale.
+## Desktop
 
-Certificates renew automatically when within **30 days** of expiry.
+1. Connect PWA → **Phone hub server** shows transport status, errors, and **Retry certificate**.
+2. Freight / PalletVision pages show the same TLS status and retry when HTTPS is unavailable.
+3. Unchecking “use HTTP” is removed — HTTPS is always on for phone tools.
 
-## Troubleshooting
+## Phone checklist
 
-| Issue | What to do |
-|--------|------------|
-| Phone TLS error on `*.ts.net` | Confirm HTTPS Certificates in Tailscale admin; **Retry certificate**; links must use MagicDNS name, not raw 100.x IP. |
-| Local LAN HTTPS error | Open `http://<desktop-ip>:48730/` and install the CA; confirm fingerprint on desktop. |
-| Uploads work on HTTP fallback only | Fix Tailscale cert or local CA; toolkit upgrades links when HTTPS is ready. |
-| Want plain HTTP always | Uncheck **Use HTTPS for phone tools** on Connect PWA. |
+| Symptom | Fix |
+|--------|-----|
+| Desktop shows certificate error | Fix Tailscale HTTPS or local CA; tap **Retry certificate** on desktop |
+| Local LAN TLS error on phone | Open `http://<desktop-ip>:48730/`, install CA, verify fingerprint on desktop |
+| PWA install / push / Background Fetch | Require HTTPS **and** trusted cert on the phone |
+| Uploads stall when hub offline | Desktop must show HTTPS ready and servers running |
 
-## Adding a new phone tool
+## Developers
 
-1. Import `PhoneTlsManager` and `startPhoneToolServer` from `electron/tls`.
-2. Call `refreshServerTls` on restart; pass `tls` from the manager and `allowInsecureHttp: tlsManager.getPhoneHttpMode()`.
-3. Build URLs with `buildPhoneOrigin` / `tlsManager.buildToolBaseUrl`.
-4. Keep the private-network IP allowlist on the request handler.
+1. Single `PhoneTlsManager` per toolkit profile; `load()` on startup.
+2. `refreshServerTls` before starting listeners; pass `tls: manager.getServerTls()` and **`allowInsecureHttp: false`**.
+3. Do not start plain HTTP on 48731–48734. Port 48730 remains HTTP for CA bootstrap only.
