@@ -61,18 +61,29 @@ export class ConnectPwaServer {
   }
 
   async restartPhoneListener() {
-    if (this.phoneHandle) await this.phoneHandle.close();
-    this.phoneHandle = undefined;
-    this.port = 0;
     const hosts = await this.phoneTlsHosts();
     await this.tlsManager.refreshServerTls(this.useTailscale, hosts);
     const tls = this.tlsManager.getServerTls();
     const allowInsecure = this.tlsManager.getAllowInsecureHttp();
     if (!tls && !allowInsecure) {
+      if (this.phoneHandle) {
+        await this.phoneHandle.close();
+        this.phoneHandle = undefined;
+        this.port = 0;
+      }
       const status = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
       this.error = status.tlsError || 'HTTPS is required for phone links.';
       return;
     }
+    if (this.phoneHandle && tls) {
+      this.phoneHandle.updateTls(tls);
+      this.port = CONNECT_PWA_PORT;
+      this.error = '';
+      return;
+    }
+    if (this.phoneHandle) await this.phoneHandle.close();
+    this.phoneHandle = undefined;
+    this.port = 0;
     try {
       this.phoneHandle = await startPhoneToolServer({
         port: CONNECT_PWA_PORT,

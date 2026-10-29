@@ -18,6 +18,7 @@ export type PhoneServerTls = {
 export type PhoneServerHandle = {
   port: number;
   close: () => Promise<void>;
+  updateTls: (tlsMaterial: PhoneServerTls) => void;
 };
 
 function wrapHandler(handler: PhoneToolHandler, secure: boolean): http.RequestListener {
@@ -33,16 +34,21 @@ function wrapHandler(handler: PhoneToolHandler, secure: boolean): http.RequestLi
 }
 
 function createHttpsServer(tlsMaterial: PhoneServerTls, handler: http.RequestListener) {
-  const defaultContext = tls.createSecureContext({ cert: tlsMaterial.cert, key: tlsMaterial.key });
-  let sniContext: tls.SecureContext | undefined;
-  const suffix = (tlsMaterial.sniSuffix || '').toLowerCase();
-  if (suffix && tlsMaterial.sniCert && tlsMaterial.sniKey) {
-    sniContext = tls.createSecureContext({ cert: tlsMaterial.sniCert, key: tlsMaterial.sniKey });
-  }
+  const state = { material: tlsMaterial };
+  const buildContexts = () => {
+    const defaultContext = tls.createSecureContext({ cert: state.material.cert, key: state.material.key });
+    let sniContext: tls.SecureContext | undefined;
+    const suffix = (state.material.sniSuffix || '').toLowerCase();
+    if (suffix && state.material.sniCert && state.material.sniKey) {
+      sniContext = tls.createSecureContext({ cert: state.material.sniCert, key: state.material.sniKey });
+    }
+    return { defaultContext, sniContext, suffix };
+  };
   const options: https.ServerOptions = {
     cert: tlsMaterial.cert,
     key: tlsMaterial.key,
     SNICallback: (servername, cb) => {
+      const { defaultContext, sniContext, suffix } = buildContexts();
       const host = (servername || '').toLowerCase();
       if (sniContext && suffix && host.endsWith(suffix)) {
         cb(null, sniContext);
@@ -51,7 +57,14 @@ function createHttpsServer(tlsMaterial: PhoneServerTls, handler: http.RequestLis
       cb(null, defaultContext);
     }
   };
-  return https.createServer(options, handler);
+  const server = https.createServer(options, handler);
+  return {
+    server,
+    updateTls(next: PhoneServerTls) {
+      state.material = next;
+      server.setSecureContext({ cert: next.cert, key: next.key });
+    }
+  };
 }
 
 /** Start a phone tool listener on a fixed port (HTTPS when TLS material is present). */
@@ -74,6 +87,7 @@ export async function startPhoneToolServer(options: {
     });
     return {
       port,
+      updateTls: () => { /* HTTP-only listener has no TLS context */ },
       close: async () => {
         await new Promise<void>(resolve => server.close(() => resolve()));
         server.closeAllConnections();
@@ -83,15 +97,18 @@ export async function startPhoneToolServer(options: {
 
   const server = createHttpsServer(tlsMaterial, httpsHandler);
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '0.0.0.0', () => resolve());
+    server.server.once('error', reject);
+    server.server.listen(port, '0.0.0.0', () => resolve());
   });
 
   return {
     port,
+    updateTls: (next: PhoneServerTls) => {
+      server.updateTls(next);
+    },
     close: async () => {
-      await new Promise<void>(resolve => server.close(() => resolve()));
-      server.closeAllConnections();
+      await new Promise<void>(resolve => server.server.close(() => resolve()));
+      server.server.closeAllConnections();
     }
   };
 }

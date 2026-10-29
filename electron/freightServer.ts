@@ -65,9 +65,6 @@ export class FreightServer {
     await this.restartPhoneListener();
   }
   async restartPhoneListener() {
-    if (this.phoneHandle) await this.phoneHandle.close();
-    this.phoneHandle = undefined;
-    this.port = 0;
     const { hosts } = await listPhoneUrlHosts({
       useTailscale: this.useTailscale,
       preferredLanAddress: this.preferredAddress,
@@ -77,10 +74,24 @@ export class FreightServer {
     const tls = this.tlsManager.getServerTls();
     const allowInsecure = this.tlsManager.getAllowInsecureHttp();
     if (!tls && !allowInsecure) {
+      if (this.phoneHandle) {
+        await this.phoneHandle.close();
+        this.phoneHandle = undefined;
+        this.port = 0;
+      }
       const status = await this.tlsManager.publicStatus(this.useTailscale, this.preferredAddress || '127.0.0.1');
       this.error = status.tlsError || 'HTTPS is required for phone links.';
       return;
     }
+    if (this.phoneHandle && tls) {
+      this.phoneHandle.updateTls(tls);
+      this.port = FREIGHT_PHONE_PORT;
+      this.error = '';
+      return;
+    }
+    if (this.phoneHandle) await this.phoneHandle.close();
+    this.phoneHandle = undefined;
+    this.port = 0;
     try {
       this.phoneHandle = await startPhoneToolServer({
         port: FREIGHT_PHONE_PORT,

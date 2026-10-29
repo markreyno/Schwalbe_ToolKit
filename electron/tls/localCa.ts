@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
+import { LOCAL_LEAF_RENEW_WITHIN_DAYS, decideCaRenewal, decideLocalLeafRenewal } from './certRenewalPolicy';
 
 const CA_DIR = 'phone-local-ca';
 const CA_CERT = 'ca.crt';
@@ -24,7 +25,7 @@ function fingerprintPem(pem: string): string {
   return hash.replace(/(.{2})/g, '$1:').replace(/:$/, '');
 }
 
-function collectSans(extraHosts: string[] = []): string[] {
+export function collectSans(extraHosts: string[] = []): string[] {
   const sans = new Set<string>(['localhost', '127.0.0.1']);
   const hostname = os.hostname();
   if (hostname) sans.add(hostname.toLowerCase());
@@ -48,8 +49,8 @@ function leafCertStillUsable(certPem: string): boolean {
   try {
     const cert = forge.pki.certificateFromPem(certPem);
     const now = Date.now();
-    const renewBefore = 2 * 24 * 60 * 60 * 1000;
-    if (cert.validity.notAfter.getTime() - renewBefore < now) return false;
+    const renewBeforeMs = LOCAL_LEAF_RENEW_WITHIN_DAYS * 24 * 60 * 60 * 1000;
+    if (cert.validity.notAfter.getTime() - renewBeforeMs < now) return false;
     const lifetimeDays = (cert.validity.notAfter.getTime() - cert.validity.notBefore.getTime()) / (24 * 60 * 60 * 1000);
     if (lifetimeDays > MAX_LEAF_VALIDITY_DAYS + 1) return false;
     const eku = cert.getExtension('extKeyUsage') as { serverAuth?: boolean } | null;
@@ -89,12 +90,14 @@ async function readIfExists(file: string): Promise<string | null> {
   }
 }
 
-async function ensureCaPair(dir: string): Promise<{ caCertPem: string; caKeyPem: string }> {
+async function ensureCaPair(dir: string): Promise<{ caCertPem: string; caKeyPem: string; renewed: boolean }> {
   const certPath = path.join(dir, CA_CERT);
   const keyPath = path.join(dir, CA_KEY);
   const existingCert = await readIfExists(certPath);
   const existingKey = await readIfExists(keyPath);
-  if (existingCert && existingKey) return { caCertPem: existingCert, caKeyPem: existingKey };
+  if (existingCert && existingKey && decideCaRenewal(existingCert) === 'ok') {
+    return { caCertPem: existingCert, caKeyPem: existingKey, renewed: false };
+  }
 
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const cert = forge.pki.createCertificate();
@@ -117,7 +120,7 @@ async function ensureCaPair(dir: string): Promise<{ caCertPem: string; caKeyPem:
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(certPath, caCertPem);
   await fs.writeFile(keyPath, caKeyPem, { mode: 0o600 });
-  return { caCertPem, caKeyPem };
+  return { caCertPem, caKeyPem, renewed: true };
 }
 
 function issueServerCert(caCertPem: string, caKeyPem: string, sans: string[]): { certPem: string; keyPem: string } {
@@ -152,22 +155,29 @@ export async function ensureLocalTlsMaterial(userDataDir: string, forceRegenerat
   const sans = collectSans(extraHosts);
   const sansKey = sans.sort().join(',');
   const metaPath = path.join(dir, 'server-meta.json');
-  if (!forceRegenerate) {
+  let storedMeta: { sansKey?: string } = {};
+  try {
+    storedMeta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
+  } catch { /* regenerate below */ }
+  const existingCert = await readIfExists(path.join(dir, 'server.crt'));
+  const leafDecision = decideLocalLeafRenewal({
+    certPem: existingCert || '',
+    requiredSans: sans,
+    storedSansKey: storedMeta.sansKey,
+  });
+  if (!forceRegenerate && leafDecision === 'ok') {
     try {
-      const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
-      if (meta.sansKey === sansKey) {
-        const certPem = await fs.readFile(path.join(dir, 'server.crt'), 'utf8');
-        const keyPem = await fs.readFile(path.join(dir, 'server.key.pem'), 'utf8');
-        if (leafCertStillUsable(certPem)) {
-          return {
-            caCertPem,
-            caKeyPem,
-            serverCertPem: certPem,
-            serverKeyPem: keyPem,
-            fingerprintSha256: fingerprintPem(caCertPem),
-            sans
-          };
-        }
+      const certPem = await fs.readFile(path.join(dir, 'server.crt'), 'utf8');
+      const keyPem = await fs.readFile(path.join(dir, 'server.key.pem'), 'utf8');
+      if (leafCertStillUsable(certPem)) {
+        return {
+          caCertPem,
+          caKeyPem,
+          serverCertPem: certPem,
+          serverKeyPem: keyPem,
+          fingerprintSha256: fingerprintPem(caCertPem),
+          sans
+        };
       }
     } catch { /* regenerate */ }
   }
