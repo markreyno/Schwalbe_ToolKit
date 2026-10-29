@@ -32,6 +32,7 @@ async function startFreightShipment(browser: import('@playwright/test').Browser,
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
   const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
   await mobile.goto(localUrl);
+  await expect(mobile.locator('#upload')).toBeVisible();
   const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQUR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=', 'base64');
   return { app, page, mobile, shipment, bytes };
 }
@@ -43,15 +44,15 @@ async function stagePictures(mobile: import('@playwright/test').Page, bytes: Buf
   await mobile.locator('#confirm').check();
 }
 
-test('freight confirm cancel does not start batch', async ({ browser }) => {
+test('Upload All stays disabled until confirm checkbox is checked', async ({ browser }) => {
   const { app, mobile, shipment, bytes } = await startFreightShipment(browser, 'Folder Cancel Co');
-  await stagePictures(mobile, bytes);
+  await mobile.locator('#files').setInputFiles([{ name: 'p0.png', mimeType: 'image/png', buffer: bytes }]);
+  await mobile.getByLabel('Pallet amount', { exact: true }).fill('1');
   let batchStarted = false;
   mobile.on('request', req => { if (req.url().includes('/batch?')) batchStarted = true; });
-  await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await expect(mobile.locator('#confirm-step')).toBeVisible();
-  await mobile.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(mobile.locator('#capture-block')).toBeVisible();
+  await expect(mobile.getByRole('button', { name: 'Upload All', exact: true })).toBeDisabled();
+  await mobile.locator('#confirm').check();
+  await expect(mobile.getByRole('button', { name: 'Upload All', exact: true })).toBeEnabled();
   expect(batchStarted).toBe(false);
   expect(await readdir(shipment.folder)).toHaveLength(0);
   await mobile.close();
@@ -64,7 +65,6 @@ test('desktop subfolder routes phone upload to sanitized path', async ({ browser
   await stagePictures(mobile, bytes, 1);
   const batchRequest = mobile.waitForRequest(r => r.url().includes('/batch?'));
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
   const batchBody = (await batchRequest).postDataJSON();
   expect(batchBody.folderName).toBeUndefined();
   await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
@@ -102,7 +102,6 @@ test('cancel upload removes empty batch subfolder', async ({ browser }) => {
     await route.continue();
   });
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
   await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
   releaseFirst?.();
   await expect(mobile.locator('#message')).toContainText('Upload canceled');

@@ -30,7 +30,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
     await mkdir(pvArtifactDir, { recursive: true });
   });
 
-  test('confirm step, desktop subfolder, back from upload (dist-electron HTTPS)', async ({ browser }) => {
+  test('Upload All starts immediately, desktop subfolder, upload progress (dist-electron HTTPS)', async ({ browser }) => {
     const builtPage = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
     expect(builtPage).toContain('saving-to');
     expect(builtPage).not.toContain('edit-shipment');
@@ -71,6 +71,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
       await mobile.goto(url);
       await mobile.waitForSelector('.phone-home-link');
+      await expect(mobile.locator('#upload')).toBeVisible();
       await expect(mobile.locator('#app-version')).toContainText(/^v\d+\.\d+\.\d+$/);
       await expect(mobile.locator('#saving-to')).toContainText('Saving to:');
       await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
@@ -89,8 +90,6 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       });
 
       await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-      await expect(mobile.locator('#confirm-step')).toBeVisible();
-      await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
       await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
       await mobile.screenshot({ path: path.join(artifactDir, '02-uploading.png'), fullPage: true });
 

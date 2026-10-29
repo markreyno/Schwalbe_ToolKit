@@ -44,7 +44,8 @@ function isPrivateIP(ip: string): boolean {
 
 const token = () => randomBytes(24).toString('hex');
 type Shipment = { id: string; company: string; date: string; folder: string; token: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string; phoneSubfolder?: string };
-type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; lockUntil: number; uploadDir: string; uploadFolderLabel: string };
+type PhoneUploadChannel = 'background-fetch' | 'service-worker' | 'page';
+type Batch = { id: string; shipment: Shipment; files: { name: string; size: number; hash?: string; saved?: string }[]; lockUntil: number; uploadDir: string; uploadFolderLabel: string; phoneUploadChannel?: PhoneUploadChannel };
 export class FreightServer {
   private phoneHandle?: PhoneServerHandle;
   private root = '';
@@ -122,7 +123,10 @@ export class FreightServer {
     const total = batch.files.length;
     const completed = batch.files.filter(f => f.saved).length;
     if (completed >= total && total > 0 && !this.batchHasUnfinishedFiles(batch)) return null;
-    return { batchId: batch.id, total, completed };
+    return { batchId: batch.id, total, completed, channel: batch.phoneUploadChannel ?? 'page' };
+  }
+  private notePhoneUploadChannel(channel: PhoneUploadChannel) {
+    if (this.batch) this.batch.phoneUploadChannel = channel;
   }
   private async removeEmptyUploadSubfolder(uploadDir: string, shipmentFolder: string) {
     const root = path.resolve(shipmentFolder);
@@ -399,8 +403,24 @@ export class FreightServer {
     }
     if (req.method === 'POST' && url.pathname === '/batch') {
       const data = JSON.parse((await this.body(req, 100000)).toString());
+      if (
+        data.batchId &&
+        this.batch &&
+        this.batch.id === data.batchId &&
+        this.batch.shipment === shipment &&
+        (data.uploadChannel === 'background-fetch' || data.uploadChannel === 'service-worker' || data.uploadChannel === 'page') &&
+        (!Array.isArray(data.files) || data.files.length === 0)
+      ) {
+        this.notePhoneUploadChannel(data.uploadChannel);
+        this.touchBatchLock();
+        json({ id: this.batch.id, uploadChannel: data.uploadChannel });
+        return;
+      }
       if (this.batch && this.batch.shipment === shipment && this.batchHasUnfinishedFiles()) {
         if (data.batchId && data.batchId !== this.batch.id) throw new Error('Another upload batch is already in progress on the desktop.');
+        if (data.uploadChannel === 'background-fetch' || data.uploadChannel === 'service-worker' || data.uploadChannel === 'page') {
+          this.notePhoneUploadChannel(data.uploadChannel);
+        }
         this.touchBatchLock();
         const completed = this.batch.files.filter(f => f.saved).length;
         json({
@@ -436,6 +456,9 @@ export class FreightServer {
         uploadDir,
         uploadFolderLabel: path.basename(uploadDir)
       };
+      if (data.uploadChannel === 'background-fetch' || data.uploadChannel === 'service-worker' || data.uploadChannel === 'page') {
+        this.batch.phoneUploadChannel = data.uploadChannel;
+      }
       json({ id: this.batch.id, uploadFolder: this.batch.uploadFolderLabel, total: this.batch.files.length, completed: 0 });
       return;
     }
@@ -445,6 +468,10 @@ export class FreightServer {
     if (req.method === 'POST' && url.pathname === '/cancel') { await this.abandonBatch(); json({ canceled: true }); return; }
     if (req.method === 'POST' && url.pathname === '/file') {
       if (this.writing) throw new Error('Another picture is being saved. Retry.');
+      const channelHeader = req.headers['x-freight-upload-channel'];
+      if (channelHeader === 'background-fetch' || channelHeader === 'service-worker' || channelHeader === 'page') {
+        this.notePhoneUploadChannel(channelHeader);
+      }
       const index = Number(url.searchParams.get('index')); const f = batch.files[index]; if (!Number.isInteger(index) || !f) throw new Error('Invalid picture.');
       let clientAborted = false;
       const markAborted = () => { clientAborted = true; };

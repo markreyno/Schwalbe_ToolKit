@@ -162,6 +162,66 @@
     return out;
   }
 
+  function hasUsableFiles(pending) {
+    return (pending?.files || []).map(materializeFile).some(f => f?.blob instanceof Blob && f.blob.size > 0);
+  }
+
+  function shouldAutoResumeUpload(pending) {
+    if (!pending?.shipmentKey || !hasUsableFiles(pending)) return false;
+    if ((pending.uploadedIndices?.length || 0) > 0) return true;
+    if (pending.batchId) return true;
+    return false;
+  }
+
+  function pendingByteTotal(pending) {
+    return (pending?.files || []).reduce((n, f) => {
+      const file = materializeFile(f);
+      return n + Math.max(0, file?.size || file?.blob?.size || 0);
+    }, 0);
+  }
+
+  function pendingDoneBytes(pending) {
+    let done = 0;
+    for (const i of pending?.uploadedIndices || []) {
+      const file = materializeFile(pending.files[i]);
+      if (file) done += Math.max(0, file.size || file.blob?.size || 0);
+    }
+    return done;
+  }
+
+  /** Drop stale v1.6.7 leftovers and empty shells; return a usable pending record or null. */
+  async function repairAndLoadPending() {
+    let record = await getPending();
+    if (!record) return { pending: null, notice: '' };
+    if (!record.shipmentKey) {
+      await clearPending();
+      return { pending: null, notice: '' };
+    }
+    if (!Array.isArray(record.uploadedIndices)) record.uploadedIndices = [];
+    if (!Array.isArray(record.files)) record.files = [];
+    const materialized = record.files.map(materializeFile);
+    const usable = materialized.filter(f => f?.blob instanceof Blob && f.blob.size > 0);
+    if (!usable.length) {
+      await clearPending();
+      return { pending: null, notice: '' };
+    }
+    if (usable.length !== materialized.length) {
+      record.files = usable.map((f, idx) => ({ ...f, index: idx }));
+      record.uploadedIndices = record.uploadedIndices.filter(i => i < usable.length);
+      await savePending(record);
+    }
+    const { remaining } = pendingProgress(record);
+    if (remaining <= 0) {
+      await clearPending();
+      return { pending: null, notice: '' };
+    }
+    if (!shouldAutoResumeUpload(record)) {
+      await clearPending();
+      return { pending: null, notice: 'Cleared an unfinished upload draft.' };
+    }
+    return { pending: materializeRecord(record), notice: '' };
+  }
+
   global.FreightUploadQueue = {
     getPending,
     savePending,
@@ -171,6 +231,11 @@
     setBatchId,
     pendingProgress,
     remainingIndices,
-    materializeFile
+    materializeFile,
+    hasUsableFiles,
+    shouldAutoResumeUpload,
+    pendingByteTotal,
+    pendingDoneBytes,
+    repairAndLoadPending
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -19,20 +19,22 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 
 ## Phone usage
 
-1. Scan the shipment QR, master QR, or paste the link.
-2. Use **Back / New shipment** to start a new shipment without a new QR. Company and date on an open shipment are set on the **desktop** only.
-3. The page shows **Saving to:** with the desktop subfolder choice (read-only on the phone).
-4. Add up to **26 pictures** per upload batch.
-5. Enter the pallet count, check the confirmation box, then tap **Upload All**.
-6. Confirm on **Ready to upload?** with **Upload** or **Cancel**.
-7. During upload use **Back** or **Cancel upload** as needed. While pictures are uploading you will see guidance about background upload on Android Chrome (installed PWA).
+1. Scan the shipment QR, master QR, or open **Freight Pictures** from the Connect hub (no `?key=` in the URL).
+2. The **New shipment** page is the default home view: enter company and date, then **Start shipment**. Use the small **Home** arrow to return to the toolkit hub. There is no Cancel on this form.
+3. Use **Back / New shipment** from an open shipment to start another shipment without a new QR. Company and date on an open shipment are set on the **desktop** only.
+4. The page shows **Saving to:** with the desktop subfolder choice (read-only on the phone).
+5. Add up to **26 pictures** per upload batch.
+6. Enter the pallet count, check the confirmation box, then tap **Upload All** to start uploading immediately (no second confirmation screen).
+7. During upload use **Back** or **Cancel upload** as needed. The progress bar shows percent complete. While pictures are uploading you will see guidance about background upload on Android Chrome (installed PWA).
 8. Tap the **Home** arrow (top-left) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel first.
-9. The footer shows the app version (e.g. v1.6.4) so you can confirm which build loaded.
+9. The footer shows the app version (e.g. v1.6.8) so you can confirm which build loaded.
+
+Stale or empty saved upload queues from an older app version are cleared automatically when you open Freight without a shipment link. A real in-progress upload may finish in the background without leaving the New shipment page.
 
 ## Resumable uploads
 
-1. When you tap **Upload**, the phone copies **original** pictures plus shipment metadata into **IndexedDB** before any network upload starts.
-2. Pictures upload **one at a time** (or via **Background Fetch** on Android Chrome over HTTPS when the browser supports it). The desktop keeps a **partial batch** until **Cancel upload** or completion.
+1. When you tap **Upload All**, the phone copies **original** pictures plus shipment metadata into **IndexedDB** before any network upload starts.
+2. Pictures upload **one at a time** from the phone page, or **all remaining files via Background Fetch** when Freight is opened from the **installed Connect PWA** (see [Background upload](freight-background-upload.md)). The desktop shows whether the active batch uses **background**, **service worker**, or **phone page** upload.
 3. If you leave the page, lose Wi‑Fi, or turn the screen off, the queue stays on the phone. Reopen **Freight Pictures** (shipment link, master link, or Connect hub) to see **Resuming upload: X of Y pictures**.
 4. Desktop shows **Upload in progress (X of Y)** until the batch finishes.
 

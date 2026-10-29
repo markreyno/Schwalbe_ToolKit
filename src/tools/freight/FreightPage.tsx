@@ -6,7 +6,15 @@ import { PhoneTlsStatus } from '../../components/PhoneTlsStatus';
 
 function freightShipmentStatus(s: FreightState['shipments'][number]) {
   if (s.closed) return 'Complete';
-  if (s.phoneUpload) return `Upload in progress (${s.phoneUpload.completed} of ${s.phoneUpload.total})`;
+  if (s.phoneUpload) {
+    const mode =
+      s.phoneUpload.channel === 'background-fetch'
+        ? 'background'
+        : s.phoneUpload.channel === 'service-worker'
+          ? 'service worker'
+          : 'phone page';
+    return `Upload in progress (${s.phoneUpload.completed} of ${s.phoneUpload.total}, ${mode})`;
+  }
   if (s.reupload) return 'Reupload open';
   return 'Awaiting pictures';
 }

@@ -37,6 +37,7 @@ test('cancel upload removes partial files and releases the batch lock immediatel
     const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await mobile.goto(localUrl);
+    await expect(mobile.locator('#upload')).toBeVisible();
 
     const bytes = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=',
@@ -58,7 +59,6 @@ test('cancel upload removes partial files and releases the batch lock immediatel
     });
 
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-    await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
     await expect(mobile.getByRole('button', { name: 'Cancel upload', exact: true })).toBeVisible();
     await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
     releaseFirstFile?.();
@@ -72,7 +72,6 @@ test('cancel upload removes partial files and releases the batch lock immediatel
     await mobile.unroute(/\/file\?/);
     await mobile.locator('#confirm').check();
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-    await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
     await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
     expect(await fs.readdir(shipment.folder)).toHaveLength(2);
 

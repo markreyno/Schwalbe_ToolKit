@@ -44,6 +44,7 @@ test('phone upload page shows no Edit control', async ({ browser }) => {
   const { app, mobile, url } = await launchFreightWithShipment(browser, 'Taffej', '2026-10-08');
   try {
     await mobile.goto(url);
+    await expect(mobile.locator('#upload')).toBeVisible();
     await expect(mobile.locator('#title')).toHaveText('Taffej · 2026-10-08');
     await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
     await expect(mobile.locator('#edit-shipment')).toHaveCount(0);
@@ -78,22 +79,15 @@ test('phone cannot rename shipment via API', async ({ browser }) => {
   }
 });
 
-test('new shipment cancel stays on setup and does not reopen a previous shipment', async ({ browser }) => {
+test('New shipment form has no Cancel button on hub or from Back / New shipment', async ({ browser }) => {
   const { app, mobile, url } = await launchFreightWithShipment(browser, 'Paw', '2026-10-28');
   try {
     await mobile.goto(url);
-    await expect(mobile.locator('#title')).toContainText('Paw');
-
     await mobile.getByRole('button', { name: 'Back / New shipment', exact: true }).click();
     await expect(mobile.locator('#shipment-setup')).toBeVisible();
-    await mobile.locator('#new-company').fill('Thhhh');
-    await mobile.getByRole('button', { name: 'Cancel', exact: true }).click();
-
-    await expect(mobile.locator('#shipment-setup')).toBeVisible();
+    await expect(mobile.locator('#cancel-new-shipment')).toHaveCount(0);
     await expect(mobile.locator('#upload')).toBeHidden();
-    await expect(mobile.locator('#new-company')).toHaveValue('');
-    await expect(mobile.getByRole('heading', { name: 'New shipment', exact: true })).toBeVisible();
-
+    await expect(mobile.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
     await mobile.close();
   } finally {
     await app.close();

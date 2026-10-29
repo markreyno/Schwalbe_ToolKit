@@ -1,11 +1,57 @@
 const key = new URLSearchParams(location.search).get('key');
 const ACTIVE_SESSION_KEY = 'schwalbe-freight-phone-active';
-const LEAVE_PAGE_HINT = 'Android Chrome (installed PWA): remaining pictures keep uploading while the screen is locked or this tab is in the background. If the phone is fully powered off, reopen Freight Pictures to continue.';
-const BACKGROUND_ACTIVE_HINT = 'Upload continues in the background. You can lock your phone or leave this page.';
+const LEAVE_PAGE_HINT = 'Installed Connect PWA: pictures can keep uploading with the screen locked. A normal Chrome tab only continues while Android keeps the tab alive — install the PWA for reliable background upload.';
+const BACKGROUND_ACTIVE_HINT = 'Upload continues in the background. You can lock your phone or switch apps.';
+const TAB_BACKGROUND_LIMIT_HINT = 'Chrome tab: upload may pause when the tab is closed. Install the Connect PWA from the hub for Background Fetch.';
 const el = id => document.getElementById(id);
 const uploadQueue = () => window.FreightUploadQueue;
 let selected = [], batch = null, busy = false, mode = false, urls = [], activeXhr = null, uploadCanceled = false, finishAbort = null;
-let saveTarget = '', uiPhase = 'pick';
+let saveTarget = '', uiPhase = 'pick', activeProgressPending = null, uploadSwReady = null, activeUploadChannel = 'page', swProgressListener = null;
+
+function pendingBytesApi() {
+  const Q = uploadQueue();
+  return Q ? { total: Q.pendingByteTotal, done: Q.pendingDoneBytes } : null;
+}
+
+/** Progress bar uses 0–100% from bytes uploaded / total bytes (works on Android Chrome). */
+function setUploadProgressBytes(doneBytes, totalBytes) {
+  const progress = el('progress');
+  const total = Math.max(1, Number(totalBytes) || 1);
+  let done = Number(doneBytes);
+  if (!Number.isFinite(done)) done = 0;
+  progress.max = 100;
+  progress.value = Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+}
+
+function syncProgressFromPending(pending, extraDoneBytes) {
+  activeProgressPending = pending || activeProgressPending;
+  const p = pending || activeProgressPending;
+  const api = pendingBytesApi();
+  if (!p || !api) {
+    setUploadProgressBytes(0, 1);
+    return;
+  }
+  setUploadProgressBytes(api.done(p) + (extraDoneBytes || 0), api.total(p));
+}
+
+function resetUploadProgress() {
+  activeProgressPending = null;
+  setUploadProgressBytes(0, 1);
+}
+
+function uploadProgressLabel(pending, resuming) {
+  const Q = uploadQueue();
+  if (!Q || !pending) return '';
+  const { total, uploaded } = Q.pendingProgress(pending);
+  const next = Math.min(uploaded + 1, total);
+  const prefix = resuming && uploaded > 0 ? 'Resuming upload: ' : 'Uploading picture ';
+  return prefix + next + ' of ' + total + '…';
+}
+
+function isResumeUpload(pending) {
+  const Q = uploadQueue();
+  return !!Q?.shouldAutoResumeUpload?.(pending);
+}
 
 function todayLocalIso() {
   const d = new Date();
@@ -25,6 +71,7 @@ function setSavingTo(label) {
 function showUploadView() {
   el('shipment-setup').hidden = true;
   el('upload').hidden = false;
+  if (window.isSecureContext && 'serviceWorker' in navigator) void registerServiceWorkerForUploads();
 }
 
 function showShipmentSetup(prefillCompany, prefillDate) {
@@ -38,16 +85,13 @@ function showShipmentSetup(prefillCompany, prefillDate) {
 function setPhase(phase) {
   uiPhase = phase;
   const picking = phase === 'pick';
-  const confirm = phase === 'confirm';
   const uploading = phase === 'uploading';
   const result = phase === 'done' || phase === 'error';
   el('capture-block').hidden = !picking;
-  el('confirm-step').hidden = !confirm;
   el('upload-progress-panel').hidden = !uploading;
-  el('upload-result').hidden = !result;
+  el('upload-result').hidden = phase !== 'error';
   el('send').hidden = !picking || busy;
   el('retry-upload').hidden = phase !== 'error';
-  el('upload-result').hidden = phase !== 'error';
 }
 
 function markActiveShipmentSession() {
@@ -76,23 +120,8 @@ function uploadCountTotal(pending, selectedCount) {
   return Math.max(1, fromPending || fromSelection || 1);
 }
 
-/** Keep HTMLProgressElement value/max finite and valid (max >= 1). */
-function setUploadProgress(completedUnits, total) {
-  const progress = el('progress');
-  const safeTotal = Math.max(1, Number(total) || 1);
-  progress.max = safeTotal;
-  let value = Number(completedUnits);
-  if (!Number.isFinite(value)) value = 0;
-  value = Math.min(safeTotal, Math.max(0, value));
-  progress.value = value;
-}
-
-function resetUploadProgress() {
-  setUploadProgress(0, 1);
-}
-
 function validatePendingFiles(pending) {
-  if (!pending?.files?.length) throw Error('Saved upload queue is empty. Select pictures and try again.');
+  if (!pending?.files?.length) throw Error('Select pictures and tap Upload All to start.');
   for (let i = 0; i < pending.files.length; i++) {
     const f = pending.files[i];
     const blob = f.blob;
@@ -166,17 +195,35 @@ function preparePicture(file) {
   }));
   preparation.set(file, promise); preparationQueue = promise.then(() => { }); return promise;
 }
-function uploadPicture(blob, index, hash) {
+/** @deprecated file-count progress; prefer setUploadProgressBytes */
+function setUploadProgress(completedUnits, total) {
+  const api = pendingBytesApi();
+  const p = activeProgressPending;
+  if (p && api) {
+    const fileTotal = Math.max(1, p.files.length);
+    const doneBytes = api.done(p);
+    const totalBytes = api.total(p);
+    const unit = totalBytes / fileTotal;
+    setUploadProgressBytes(doneBytes + Math.max(0, completedUnits) * unit, totalBytes);
+    return;
+  }
+  setUploadProgressBytes(completedUnits, total);
+}
+
+function uploadPicture(blob, index, hash, pending) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest(); activeXhr = xhr;
     xhr.open('POST', '/file?batch=' + batch.id + '&index=' + index + '&key=' + encodeURIComponent(key));
-    xhr.setRequestHeader('X-Picture-SHA256', hash); xhr.timeout = 180000;
+    xhr.setRequestHeader('X-Picture-SHA256', hash);
+    xhr.setRequestHeader('X-Freight-Upload-Channel', 'page');
+    xhr.timeout = 180000;
     xhr.upload.onprogress = e => {
       if (uploadCanceled) return;
       if (e.lengthComputable && e.total > 0) {
+        syncProgressFromPending(pending, e.loaded);
+        const Q = uploadQueue();
+        const total = pending?.files?.length || 1;
         const fraction = e.loaded / e.total;
-        const total = uploadCountTotal(null, Number(el('progress').max) || selected.length);
-        setUploadProgress(index + fraction, total);
         message('Uploading picture ' + (index + 1) + ' of ' + total + ' · ' + Math.round(fraction * 100) + '%' + (fraction === 1 ? ' — saving on desktop…' : '') + '\n' + LEAVE_PAGE_HINT);
       }
     };
@@ -237,20 +284,12 @@ async function resetAfterCancel() {
   message('Upload canceled');
 }
 
-function goToConfirmStep() {
-  el('confirm-summary').textContent = selected.length + ' pictures to ' + (saveTarget || 'the desktop folder chosen on the PC') + '.';
-  setPhase('confirm');
-  message('');
-}
-
-el('back-to-photos').onclick = () => { goToPickStep(); };
 el('back-to-photos-upload').onclick = () => { void returnToPickFromUpload(); };
 el('cancel-upload').onclick = () => { void resetAfterCancel(); };
 
 el('retry-upload').onclick = () => { if (busy) return; void runUpload(); };
 
 el('new-shipment-nav').onclick = () => showShipmentSetup('', todayLocalIso());
-el('cancel-new-shipment').onclick = () => { showShipmentSetup('', todayLocalIso()); };
 el('new-shipment-form').onsubmit = async e => {
   e.preventDefault();
   const button = e.target.querySelector('button[type="submit"]');
@@ -264,21 +303,29 @@ el('new-shipment-form').onsubmit = async e => {
   }
 };
 
-el('send').onclick = () => { if (busy) return; goToConfirmStep(); };
-el('confirm-upload').onclick = () => { if (busy) return; void runUpload(); };
+el('send').onclick = () => { if (busy) return; void runUpload(); };
 
-async function ensureBatchOnServer(pending) {
+async function ensureBatchOnServer(pending, uploadChannel) {
   const files = pending.files.map(f => ({ name: f.name, size: f.size, hash: f.hash }));
   const body = {
     pallets: pending.pallets,
     files,
-    batchId: pending.batchId || undefined
+    batchId: pending.batchId || undefined,
+    uploadChannel: uploadChannel || activeUploadChannel || 'page'
   };
   const created = await api('/batch', post(body));
   batch = created;
   if (created.id && created.id !== pending.batchId) await uploadQueue().setBatchId(created.id);
   if (created.uploadFolder) setSavingTo(created.uploadFolder);
   return created;
+}
+
+async function reportUploadChannel(channel) {
+  activeUploadChannel = channel;
+  if (!batch?.id) return;
+  try {
+    await api('/batch', post({ batchId: batch.id, uploadChannel: channel }));
+  } catch { /* channel reporting is best-effort */ }
 }
 
 function notifyServiceWorkerToContinueUploads() {
@@ -288,22 +335,119 @@ function notifyServiceWorkerToContinueUploads() {
   }).catch(() => { });
 }
 
+function isInstalledPwa() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.matchMedia('(display-mode: fullscreen)').matches
+    || window.matchMedia('(display-mode: minimal-ui)').matches
+    || navigator.standalone === true;
+}
+
+/** Snapshot why Background Fetch may be unavailable (for support / desktop debugging). */
+async function probeBackgroundUploadSupport() {
+  const probe = {
+    secureContext: !!window.isSecureContext,
+    serviceWorker: 'serviceWorker' in navigator,
+    controller: !!navigator.serviceWorker?.controller,
+    installedPwa: isInstalledPwa(),
+    backgroundFetchApi: false,
+    backgroundFetchPermission: 'unknown',
+    reason: ''
+  };
+  if (!probe.secureContext) {
+    probe.reason = 'not-secure-context';
+    return probe;
+  }
+  if (!probe.serviceWorker) {
+    probe.reason = 'no-service-worker';
+    return probe;
+  }
+  try {
+    const reg = await ensureUploadServiceWorker();
+    probe.controller = !!navigator.serviceWorker.controller;
+    probe.backgroundFetchApi = !!(reg?.backgroundFetch && typeof reg.backgroundFetch.fetch === 'function');
+    if (!probe.backgroundFetchApi) {
+      probe.reason = probe.installedPwa ? 'background-fetch-api-missing' : 'background-fetch-needs-installed-pwa';
+      return probe;
+    }
+    try {
+      const perm = await navigator.permissions.query({ name: 'background-fetch' });
+      probe.backgroundFetchPermission = perm.state;
+      if (perm.state === 'denied') probe.reason = 'background-fetch-denied';
+    } catch {
+      probe.backgroundFetchPermission = 'unsupported';
+    }
+  } catch (e) {
+    probe.reason = 'service-worker-register-failed';
+  }
+  return probe;
+}
+
+async function ensureUploadServiceWorker() {
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) return null;
+  if (!uploadSwReady) {
+    uploadSwReady = (async () => {
+      try {
+        await navigator.serviceWorker.register('/freight-sw.js', { scope: '/' });
+        const reg = await navigator.serviceWorker.ready;
+        if (!navigator.serviceWorker.controller && reg.active) reg.active.postMessage({ type: 'freight-sw-activate' });
+        return reg;
+      } catch {
+        uploadSwReady = null;
+        return null;
+      }
+    })();
+  }
+  return uploadSwReady;
+}
+
+function attachServiceWorkerProgressListener() {
+  if (swProgressListener || !('serviceWorker' in navigator)) return;
+  swProgressListener = event => {
+    const data = event.data;
+    if (!data || data.type !== 'freight-upload-progress') return;
+    void syncUploadProgressFromQueue();
+  };
+  navigator.serviceWorker.addEventListener('message', swProgressListener);
+}
+
+async function registerServiceWorkerForUploads() {
+  attachServiceWorkerProgressListener();
+  return ensureUploadServiceWorker();
+}
+
+async function cleanupOrphanBackgroundFetches() {
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) return;
+  try {
+    const reg = await ensureUploadServiceWorker();
+    const bf = reg?.backgroundFetch;
+    if (!bf?.getIds) return;
+    const ids = await bf.getIds();
+    for (const id of ids) {
+      if (String(id).startsWith('freight-')) {
+        const item = await bf.get(id);
+        await item?.abort?.();
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+async function prepareUploadQueueOnLoad() {
+  const Q = uploadQueue();
+  if (!Q?.repairAndLoadPending) return { pending: null, notice: '' };
+  await cleanupOrphanBackgroundFetches();
+  return Q.repairAndLoadPending();
+}
+
 async function syncUploadProgressFromQueue() {
   const Q = uploadQueue();
   if (!Q) return;
   const pending = await Q.getPending();
   if (!pending || pending.shipmentKey !== key) return;
+  syncProgressFromPending(pending, 0);
   const { total, uploaded } = Q.pendingProgress(pending);
-  setUploadProgress(uploaded, total);
-  if (uploaded > 0 && uploaded < total) {
-    message('Resuming upload: ' + (uploaded + 1) + ' of ' + total + ' pictures\n' + LEAVE_PAGE_HINT);
+  if (uploaded > 0 && uploaded < total && isResumeUpload(pending)) {
+    message(uploadProgressLabel(pending, true) + '\n' + LEAVE_PAGE_HINT);
   }
-}
-
-async function registerServiceWorkerForUploads() {
-  if (!window.isSecureContext || !('serviceWorker' in navigator)) return null;
-  await navigator.serviceWorker.register('/freight-sw.js', { scope: '/' });
-  return navigator.serviceWorker.ready;
 }
 
 function backgroundFetchRegistrationId(batchId, pending) {
@@ -320,27 +464,30 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
     const bf = reg?.backgroundFetch;
     if (!bf || typeof bf.fetch !== 'function') return false;
     const requests = remaining.map(i => {
-      const f = pending.files[i];
+      const fileRec = Q.materializeFile(pending.files[i]);
       return new Request('/file?batch=' + batchId + '&index=' + i + '&key=' + encodeURIComponent(key), {
         method: 'POST',
-        headers: { 'X-Picture-SHA256': f.hash },
-        body: f.blob
+        headers: {
+          'X-Picture-SHA256': fileRec.hash,
+          'X-Freight-Upload-Channel': 'background-fetch'
+        },
+        body: fileRec.blob
       });
     });
     const downloadTotal = remaining.reduce((n, i) => n + (pending.files[i].size || 0), 0);
+    await reportUploadChannel('background-fetch');
     const bg = await bf.fetch(backgroundFetchRegistrationId(batchId, pending), requests, {
       title: 'Freight picture upload',
       downloadTotal
     });
-    const { total, uploaded } = Q.pendingProgress(pending);
-    message((resuming ? 'Resuming upload: ' : 'Uploading ') + (uploaded + 1) + ' of ' + total + '…\n' + BACKGROUND_ACTIVE_HINT + '\n' + LEAVE_PAGE_HINT);
+    const resumeLabel = resuming && isResumeUpload(pending);
+    message((resumeLabel ? uploadProgressLabel(pending, true) : uploadProgressLabel(pending, false)) + '\n' + BACKGROUND_ACTIVE_HINT + '\n' + LEAVE_PAGE_HINT);
     const onProgress = () => {
       if (uploadCanceled) return;
-      const doneFiles = uploaded;
       const bytesTotal = Math.max(1, bg.downloadTotal || downloadTotal);
       const byteFraction = Math.min(1, (bg.uploaded || 0) / bytesTotal);
-      const fileSpan = Math.max(1, remaining.length);
-      setUploadProgress(doneFiles + byteFraction * fileSpan, total);
+      const remainingBytes = remaining.reduce((n, i) => n + (pending.files[i].size || 0), 0);
+      syncProgressFromPending(pending, Math.round(remainingBytes * byteFraction));
     };
     bg.addEventListener('backgroundfetchprogress', onProgress);
     onProgress();
@@ -362,14 +509,60 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
   }
 }
 
-async function finalizeVerifiedUpload(total) {
+async function waitForServiceWorkerQueueDrain(pending, actuallyResuming) {
+  const Q = uploadQueue();
+  let stalledAt = Date.now();
+  let lastUploaded = Q.pendingProgress(pending).uploaded;
+  notifyServiceWorkerToContinueUploads();
+  while (!uploadCanceled) {
+    pending = await Q.getPending();
+    if (!pending || pending.shipmentKey !== key) throw Error('Upload queue was cleared.');
+    syncProgressFromPending(pending, 0);
+    const { uploaded, remaining } = Q.pendingProgress(pending);
+    if (remaining === 0) return pending;
+    message((actuallyResuming ? uploadProgressLabel(pending, true) : uploadProgressLabel(pending, false)) + '\n' + LEAVE_PAGE_HINT);
+    if (uploaded > lastUploaded) {
+      lastUploaded = uploaded;
+      stalledAt = Date.now();
+    } else if (Date.now() - stalledAt > 12000) {
+      notifyServiceWorkerToContinueUploads();
+      stalledAt = Date.now();
+    } else if (Date.now() - stalledAt > 45000) {
+      break;
+    }
+    await new Promise(r => setTimeout(r, 450));
+  }
+  return Q.getPending();
+}
+
+async function uploadRemainingViaPageXHR(pending, actuallyResuming) {
+  const Q = uploadQueue();
+  await reportUploadChannel('page');
+  for (let i = 0; i < pending.files.length; i++) {
+    if (uploadCanceled) break;
+    pending = await Q.getPending();
+    if (pending.uploadedIndices.includes(i)) continue;
+    const fileRec = Q.materializeFile(pending.files[i]);
+    message((actuallyResuming ? uploadProgressLabel(pending, true) : uploadProgressLabel(pending, false)) + '\n' + LEAVE_PAGE_HINT);
+    await uploadPicture(fileRec.blob, i, fileRec.hash, pending);
+    if (uploadCanceled) break;
+    await Q.markIndexUploaded(i);
+    pending = await Q.getPending();
+    syncProgressFromPending(pending, 0);
+  }
+}
+
+async function finalizeVerifiedUpload(pending) {
   message('Verifying every picture on the desktop…');
   finishAbort = new AbortController();
   await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
   finishAbort = null;
   batch = null;
   await uploadQueue().clearPending();
+  const bytesApi = pendingBytesApi();
+  if (pending && bytesApi) setUploadProgressBytes(bytesApi.total(pending), bytesApi.total(pending));
   setPhase('done');
+  const total = pending?.files?.length || 0;
   message('Complete: ' + total + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
 }
 
@@ -382,36 +575,42 @@ async function drainUploadQueue(resuming) {
     throw Error('Upload queue belongs to another shipment. Open that shipment to resume.');
   }
   validatePendingFiles(pending);
-  const { total, uploaded } = Q.pendingProgress(pending);
-  setUploadProgress(uploaded, total);
-  if (!batch) await ensureBatchOnServer(pending);
+  activeProgressPending = pending;
+  const actuallyResuming = !!resuming && isResumeUpload(pending);
+  syncProgressFromPending(pending, 0);
+  try {
+    await registerServiceWorkerForUploads();
+  } catch { /* page upload works without a controlling service worker */ }
+  const probe = await probeBackgroundUploadSupport();
+  try { sessionStorage.setItem('schwalbe-freight-upload-probe', JSON.stringify(probe)); } catch { /* ignore */ }
+  if (!batch) await ensureBatchOnServer(pending, 'page');
   pending = await Q.getPending();
-  if (await tryUploadRemainingViaBackgroundFetch(pending, batch.id, resuming)) {
+  if (await tryUploadRemainingViaBackgroundFetch(pending, batch.id, actuallyResuming)) {
     if (uploadCanceled) return;
-    await finalizeVerifiedUpload(total);
+    pending = await Q.getPending();
+    await finalizeVerifiedUpload(pending);
     return;
   }
-  for (let i = 0; i < pending.files.length; i++) {
-    if (uploadCanceled) break;
-    pending = await Q.getPending();
-    if (pending.uploadedIndices.includes(i)) continue;
-    if (await tryUploadRemainingViaBackgroundFetch(pending, batch.id, resuming)) {
-      if (uploadCanceled) return;
-      await finalizeVerifiedUpload(total);
-      return;
-    }
-    const fileRec = pending.files[i];
-    message((resuming ? 'Resuming upload: ' : 'Uploading picture ') + (i + 1) + ' of ' + total + '…\n' + LEAVE_PAGE_HINT);
+  const preferServiceWorkerDrain = probe.backgroundFetchApi || probe.installedPwa;
+  if (preferServiceWorkerDrain) {
+    await reportUploadChannel('service-worker');
+    try {
+      const reg = await ensureUploadServiceWorker();
+      if (reg?.sync?.register) await reg.sync.register('freight-upload-continue');
+    } catch { /* Background Sync is optional */ }
     notifyServiceWorkerToContinueUploads();
-    await uploadPicture(fileRec.blob, i, fileRec.hash);
-    if (uploadCanceled) break;
-    await Q.markIndexUploaded(i);
-    setUploadProgress(i + 1, total);
+    pending = await waitForServiceWorkerQueueDrain(pending, actuallyResuming);
+    if (uploadCanceled) return;
+  }
+  if (Q.pendingProgress(pending).remaining > 0) {
+    if (!preferServiceWorkerDrain) await reportUploadChannel('page');
+    else if (!isInstalledPwa()) message(TAB_BACKGROUND_LIMIT_HINT + '\n' + LEAVE_PAGE_HINT);
+    await uploadRemainingViaPageXHR(pending, actuallyResuming);
   }
   if (uploadCanceled) return;
   pending = await Q.getPending();
   if (Q.pendingProgress(pending).remaining === 0) {
-    await finalizeVerifiedUpload(total);
+    await finalizeVerifiedUpload(pending);
   }
 }
 
@@ -437,6 +636,7 @@ async function runUpload(resuming) {
         files: selected,
         hashFile
       });
+      syncProgressFromPending(await Q.getPending(), 0);
     }
     await drainUploadQueue(!!resuming);
   } catch (e) {
@@ -459,20 +659,12 @@ async function runUpload(resuming) {
   }
 }
 
-async function maybeRedirectForPendingQueue() {
-  const Q = uploadQueue();
-  if (!Q || key) return false;
-  const pending = await Q.getPending();
-  if (!pending?.shipmentKey) return false;
-  location.href = '/?key=' + encodeURIComponent(pending.shipmentKey);
-  return true;
-}
-
 async function resumePendingUploadIfAny(state) {
   const Q = uploadQueue();
-  if (!Q || busy) return false;
+  if (!Q || busy || !key) return false;
   const pending = await Q.getPending();
   if (!pending || pending.shipmentKey !== key) return false;
+  if (!Q.shouldAutoResumeUpload(pending)) return false;
   const { total, uploaded } = Q.pendingProgress(pending);
   if (uploaded >= total && total > 0) {
     await Q.clearPending();
@@ -488,7 +680,7 @@ async function resumePendingUploadIfAny(state) {
     el('send').textContent = mode ? 'Reupload All' : 'Upload All';
   }
   el('pallets').value = String(pending.pallets);
-  message('Resuming upload: ' + Math.min(uploaded + 1, total) + ' of ' + total + ' pictures\n' + LEAVE_PAGE_HINT);
+  message(uploadProgressLabel(pending, true) + '\n' + LEAVE_PAGE_HINT);
   await runUpload(true);
   return true;
 }
@@ -499,6 +691,7 @@ function tryResumeWhenIdle() {
   if (!Q) return;
   void Q.getPending().then(pending => {
     if (!pending || pending.shipmentKey !== key) return;
+    if (!Q.shouldAutoResumeUpload(pending)) return;
     const { uploaded, total } = Q.pendingProgress(pending);
     if (uploaded >= total) return;
     void api('/state')
@@ -531,7 +724,10 @@ async function reconcileUploadAfterForegroundReturn() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    if (busy && batch) notifyServiceWorkerToContinueUploads();
+    if (busy && batch) {
+      activeXhr?.abort();
+      notifyServiceWorkerToContinueUploads();
+    }
     return;
   }
   void reconcileUploadAfterForegroundReturn();
@@ -559,11 +755,16 @@ async function refreshSaveTarget() {
 api('/state').then(async s => {
   if (s.appVersion && el('app-version')) el('app-version').textContent = 'v' + s.appVersion;
   if (!s.configured) { message('Choose the storage folder in the desktop toolkit first.'); return; }
-  if (await maybeRedirectForPendingQueue()) return;
+  const queuePrep = await prepareUploadQueueOnLoad();
   if (s.hubEntry || !key) {
-    if (await resumePendingUploadIfAny(s)) return;
     clearActiveShipmentSession();
     showShipmentSetup('', todayLocalIso());
+    if (queuePrep.pending) {
+      notifyServiceWorkerToContinueUploads();
+      message('A saved picture upload is finishing in the background.');
+    } else if (queuePrep.notice) {
+      message(queuePrep.notice);
+    }
     return;
   }
   if (s.master) {
