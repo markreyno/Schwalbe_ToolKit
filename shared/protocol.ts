@@ -52,7 +52,7 @@ export type PhoneTlsState = {
   requiresCaTrust: boolean;
   installHttpsUrl: string;
 };
-export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; phoneTls: PhoneTlsState; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string; phoneSubfolder?: string; saveTarget?: string; subfolders?: string[]; phoneUpload?: { batchId: string; total: number; completed: number } | null; url: string; qr: string }[] };
+export type FreightState = { root: string; running: boolean; error: string; addresses: string[]; useTailscale: boolean; tailscale: { available: boolean; address?: string; hostname?: string; error?: string }; phoneTls: PhoneTlsState; masterUrl: string; masterQr: string; shipments: { id: string; company: string; date: string; folder: string; closed: boolean; reupload: boolean; pictures: number; lastUploadSubfolder?: string; phoneSubfolder?: string; saveTarget?: string; subfolders?: string[]; phoneUpload?: { batchId: string; total: number; completed: number; channel?: 'background-fetch' | 'service-worker' | 'page' } | null; url: string; qr: string }[] };
 
 export type PalletVisionEvent =
   | { type: 'upload_canceled'; captureId?: string; at: string }

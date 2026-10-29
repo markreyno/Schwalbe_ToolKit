@@ -41,13 +41,18 @@ async function startTwoPictureUpload(mobile: import('@playwright/test').Page, lo
   await mobile.getByLabel('Pallet amount', { exact: true }).fill('2');
   await mobile.locator('#confirm').check();
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-  await mobile.getByRole('button', { name: 'Upload', exact: true }).click();
 }
 
 test('partial resume build registers background fetch for remaining indices', async () => {
   const inline = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
+  const sw = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightSw.js'), 'utf8');
   expect(inline).toContain('tryUploadRemainingViaBackgroundFetch');
   expect(inline).toContain('backgroundFetchRegistrationId(batchId, pending)');
+  expect(inline).toContain('probeBackgroundUploadSupport');
+  expect(inline).toContain('notifyServiceWorkerToContinueUploads');
+  expect(inline).toContain('waitForServiceWorkerQueueDrain');
+  expect(sw).toContain('skipWaiting');
+  expect(sw).toContain('freight-upload-continue');
 });
 
 test('close page mid-upload then reopen and finish without duplicates', async ({ browser }) => {
@@ -149,16 +154,35 @@ test('resume after one picture completes does not throw on progress bar', async 
     await mobile.unroute(/\/file\?/);
     await mobile.reload();
     await expect(mobile.locator('#message')).toContainText('Resuming upload: 2 of 2', { timeout: 15000 });
-    const progressOk = await mobile.evaluate(() => {
-      const p = document.getElementById('progress') as HTMLProgressElement | null;
-      if (!p) return false;
-      const max = Number(p.max);
-      const val = Number(p.value);
-      return Number.isFinite(max) && max >= 1 && Number.isFinite(val) && val >= 0 && val <= max;
-    });
-    expect(progressOk).toBe(true);
-
+    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0))).toBeGreaterThan(0);
     await expect(mobile.locator('#message')).toContainText('verified', { timeout: 120000 });
+    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0))).toBe(100);
+    expect(await readdir(shipment.folder)).toHaveLength(2);
+    await mobile.close();
+  } finally {
+    await app.close();
+  }
+});
+
+test('fresh two-picture upload advances progress bar to full', async ({ browser }) => {
+  const profile = path.resolve('.cache/freight-upload-progress', randomUUID());
+  const storage = path.join(profile, 'pictures');
+  await mkdir(storage, { recursive: true });
+  const { app, page } = await launchFreightApp(storage);
+  try {
+    await page.getByLabel('Company', { exact: true }).fill('Tiidd');
+    await page.getByLabel('Date shipped').fill('2026-10-28');
+    await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
+
+    const state = await page.evaluate(() => window.toolkit.freight('status'));
+    const shipment = state.shipments.find(s => s.company === 'Tiidd')!;
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
+
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
+    await startTwoPictureUpload(mobile, localUrl);
+    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0)), { timeout: 60000 }).toBeGreaterThan(0);
+    await expect(mobile.locator('#message')).toContainText('verified', { timeout: 120000 });
+    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0))).toBe(100);
     expect(await readdir(shipment.folder)).toHaveLength(2);
     await mobile.close();
   } finally {
