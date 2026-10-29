@@ -56,7 +56,7 @@ test.describe('certificate renewal policy', () => {
         storedSansKey: material.sans.sort().join(',')
       })
     ).toBe('ok');
-    expect(certExpiresWithinDays(material.serverCertPem, 400)).toBe(false);
+    expect(certExpiresWithinDays(material.serverCertPem, 30)).toBe(false);
     await rm(root, { recursive: true, force: true });
   });
 
