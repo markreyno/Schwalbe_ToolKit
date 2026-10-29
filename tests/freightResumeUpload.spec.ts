@@ -34,6 +34,8 @@ async function launchFreightApp(storage: string) {
 
 async function startTwoPictureUpload(mobile: import('@playwright/test').Page, localUrl: string) {
   await mobile.goto(localUrl);
+  await expect(mobile.locator('#upload')).toBeVisible();
+  await expect(mobile.locator('#capture-block')).toBeVisible();
   await mobile.locator('#files').setInputFiles([
     { name: 'pallet-a.png', mimeType: 'image/png', buffer: PNG },
     { name: 'pallet-b.png', mimeType: 'image/png', buffer: PNG },
@@ -50,7 +52,7 @@ test('partial resume build registers background fetch for remaining indices', as
   expect(inline).toContain('backgroundFetchRegistrationId(batchId, pending)');
   expect(inline).toContain('probeBackgroundUploadSupport');
   expect(inline).toContain('notifyServiceWorkerToContinueUploads');
-  expect(inline).toContain('waitForServiceWorkerQueueDrain');
+  expect(inline).toContain('preferServiceWorkerDrain');
   expect(sw).toContain('skipWaiting');
   expect(sw).toContain('freight-upload-continue');
 });

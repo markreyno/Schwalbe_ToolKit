@@ -15,14 +15,14 @@ Pictures should keep uploading after **Upload All** when the driver locks the ph
 | One-off **Background Sync** | Registered as fallback; wakes SW when back online, does **not** replace Background Fetch for multi‑MB files | Same |
 | IndexedDB queue + reopen to resume | Always | Always |
 
-**Plain language:** For reliable upload with the screen off, install the **Connect PWA** from the toolkit hub (48733), trust the desktop CA, then open **Freight Pictures** from the hub tile—not only from a one-off tab bookmark.
+**Plain language:** For reliable upload with the screen off, install the **Connect PWA** from the toolkit hub (port **48734**), trust the desktop CA (port **48730**), then open **Freight Pictures** from the hub tile—not only from a one-off tab bookmark.
 
 ## What the app does (v1.6.9+)
 
 1. **Upload All** saves originals to IndexedDB, creates the desktop batch, registers the freight service worker (`skipWaiting` + `clients.claim`).
 2. **Immediately** tries **Background Fetch** for all remaining `/file` POSTs (installed PWA path).
-3. If Background Fetch is unavailable, reports **`service-worker`** on the desktop and starts the SW drain **right away** (not only when the page hides). Optional **Background Sync** tag `freight-upload-continue` is registered.
-4. If the SW makes no progress for ~45s, falls back to in-page XHR (**`page`** channel)—foreground-oriented.
+3. If Background Fetch is unavailable **and** the app is installed as a PWA, reports **`service-worker`** on the desktop and starts the SW drain **right away** (not only when the page hides). Optional **Background Sync** tag `freight-upload-continue` is registered. A **plain Chrome tab** uses in-page upload first and nudges the SW when the tab hides.
+4. If the SW makes no progress for ~45s (PWA path), falls back to in-page XHR (**`page`** channel).
 5. When the tab hides mid-upload, in-flight XHR is aborted and the SW is nudged again.
 
 ## Desktop indicator

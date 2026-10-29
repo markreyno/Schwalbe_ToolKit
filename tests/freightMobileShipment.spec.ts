@@ -44,6 +44,7 @@ test('phone upload page shows no Edit control', async ({ browser }) => {
   const { app, mobile, url } = await launchFreightWithShipment(browser, 'Taffej', '2026-10-08');
   try {
     await mobile.goto(url);
+    await expect(mobile.locator('#upload')).toBeVisible();
     await expect(mobile.locator('#title')).toHaveText('Taffej · 2026-10-08');
     await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
     await expect(mobile.locator('#edit-shipment')).toHaveCount(0);

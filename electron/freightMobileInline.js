@@ -386,10 +386,15 @@ async function ensureUploadServiceWorker() {
   if (!window.isSecureContext || !('serviceWorker' in navigator)) return null;
   if (!uploadSwReady) {
     uploadSwReady = (async () => {
-      await navigator.serviceWorker.register('/freight-sw.js', { scope: '/' });
-      const reg = await navigator.serviceWorker.ready;
-      if (!navigator.serviceWorker.controller && reg.active) reg.active.postMessage({ type: 'freight-sw-activate' });
-      return reg;
+      try {
+        await navigator.serviceWorker.register('/freight-sw.js', { scope: '/' });
+        const reg = await navigator.serviceWorker.ready;
+        if (!navigator.serviceWorker.controller && reg.active) reg.active.postMessage({ type: 'freight-sw-activate' });
+        return reg;
+      } catch {
+        uploadSwReady = null;
+        return null;
+      }
     })();
   }
   return uploadSwReady;
@@ -554,8 +559,8 @@ async function finalizeVerifiedUpload(pending) {
   finishAbort = null;
   batch = null;
   await uploadQueue().clearPending();
-  const api = pendingBytesApi();
-  if (pending && api) setUploadProgressBytes(api.total(pending), api.total(pending));
+  const bytesApi = pendingBytesApi();
+  if (pending && bytesApi) setUploadProgressBytes(bytesApi.total(pending), bytesApi.total(pending));
   setPhase('done');
   const total = pending?.files?.length || 0;
   message('Complete: ' + total + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
@@ -573,7 +578,9 @@ async function drainUploadQueue(resuming) {
   activeProgressPending = pending;
   const actuallyResuming = !!resuming && isResumeUpload(pending);
   syncProgressFromPending(pending, 0);
-  await registerServiceWorkerForUploads();
+  try {
+    await registerServiceWorkerForUploads();
+  } catch { /* page upload works without a controlling service worker */ }
   const probe = await probeBackgroundUploadSupport();
   try { sessionStorage.setItem('schwalbe-freight-upload-probe', JSON.stringify(probe)); } catch { /* ignore */ }
   if (!batch) await ensureBatchOnServer(pending, 'page');
@@ -584,16 +591,20 @@ async function drainUploadQueue(resuming) {
     await finalizeVerifiedUpload(pending);
     return;
   }
-  await reportUploadChannel('service-worker');
-  try {
-    const reg = await ensureUploadServiceWorker();
-    if (reg?.sync?.register) await reg.sync.register('freight-upload-continue');
-  } catch { /* Background Sync is optional */ }
-  notifyServiceWorkerToContinueUploads();
-  pending = await waitForServiceWorkerQueueDrain(pending, actuallyResuming);
-  if (uploadCanceled) return;
+  const preferServiceWorkerDrain = probe.backgroundFetchApi || probe.installedPwa;
+  if (preferServiceWorkerDrain) {
+    await reportUploadChannel('service-worker');
+    try {
+      const reg = await ensureUploadServiceWorker();
+      if (reg?.sync?.register) await reg.sync.register('freight-upload-continue');
+    } catch { /* Background Sync is optional */ }
+    notifyServiceWorkerToContinueUploads();
+    pending = await waitForServiceWorkerQueueDrain(pending, actuallyResuming);
+    if (uploadCanceled) return;
+  }
   if (Q.pendingProgress(pending).remaining > 0) {
-    if (!isInstalledPwa()) message(TAB_BACKGROUND_LIMIT_HINT + '\n' + LEAVE_PAGE_HINT);
+    if (!preferServiceWorkerDrain) await reportUploadChannel('page');
+    else if (!isInstalledPwa()) message(TAB_BACKGROUND_LIMIT_HINT + '\n' + LEAVE_PAGE_HINT);
     await uploadRemainingViaPageXHR(pending, actuallyResuming);
   }
   if (uploadCanceled) return;

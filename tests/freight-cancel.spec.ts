@@ -37,6 +37,7 @@ test('cancel upload removes partial files and releases the batch lock immediatel
     const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await mobile.goto(localUrl);
+    await expect(mobile.locator('#upload')).toBeVisible();
 
     const bytes = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=',

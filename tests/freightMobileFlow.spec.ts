@@ -71,6 +71,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       const url = shipment.url.replace(/^https?:\/\/[^/]+/, `https://127.0.0.1:${FREIGHT_PHONE_PORT}`);
       await mobile.goto(url);
       await mobile.waitForSelector('.phone-home-link');
+      await expect(mobile.locator('#upload')).toBeVisible();
       await expect(mobile.locator('#app-version')).toContainText(/^v\d+\.\d+\.\d+$/);
       await expect(mobile.locator('#saving-to')).toContainText('Saving to:');
       await expect(mobile.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
