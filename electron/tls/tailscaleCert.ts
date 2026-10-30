@@ -2,19 +2,12 @@ import forge from 'node-forge';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTailscaleCert } from './tailscaleExec';
+import { certExpiresWithinDays, decideTailscaleCertRenewal, DEFAULT_RENEW_WITHIN_DAYS } from './certRenewalPolicy';
 
 export type TailscaleCertFiles = { certPem: string; keyPem: string; certPath: string; keyPath: string };
 
-const RENEW_WITHIN_DAYS = 30;
-
-export function certExpiresSoon(pem: string, days = RENEW_WITHIN_DAYS): boolean {
-  try {
-    const cert = forge.pki.certificateFromPem(pem);
-    const ms = cert.validity.notAfter.getTime() - Date.now();
-    return ms < days * 24 * 60 * 60 * 1000;
-  } catch {
-    return true;
-  }
+export function certExpiresSoon(pem: string, days = DEFAULT_RENEW_WITHIN_DAYS): boolean {
+  return certExpiresWithinDays(pem, days);
 }
 
 export function tailscaleCertExpiryIso(pem: string): string {
@@ -32,7 +25,8 @@ export async function obtainTailscaleCert(hostname: string, certDir: string, opt
   const certPath = path.join(certDir, `${cleanHost}.crt`);
   const keyPath = path.join(certDir, `${cleanHost}.key`);
   const existingCert = await fs.readFile(certPath, 'utf8').catch(() => '');
-  if (existingCert && !options?.forceRenew && !certExpiresSoon(existingCert)) {
+  const renewDecision = decideTailscaleCertRenewal({ certPem: existingCert, expectedHostname: cleanHost });
+  if (!options?.forceRenew && renewDecision === 'ok') {
     const keyPem = await fs.readFile(keyPath, 'utf8');
     return { certPem: existingCert, keyPem, certPath, keyPath };
   }

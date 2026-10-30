@@ -74,6 +74,7 @@ app.whenReady().then(async () => {
     }
   }, pickerWaterBridge);
   app.on('before-quit', () => { void caTrust.close(); });
+  void tlsManager.runStartupCertificateCheck();
   createWindow();
   app.on('activate', () => { if (!mainWindow) createWindow(); });
 });

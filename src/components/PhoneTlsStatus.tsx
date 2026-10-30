@@ -10,8 +10,11 @@ export function PhoneTlsStatus({ tls }: { tls?: PhoneTlsState }) {
       {tls.tailscaleCertHostname && tls.usingTailscaleCert && (
         <p className="freight-muted">Tailscale cert: <code>{tls.tailscaleCertHostname}</code>{tls.tailscaleCertExpiresAt ? ` · expires ${new Date(tls.tailscaleCertExpiresAt).toLocaleString()}` : ''}</p>
       )}
-      {!tls.usingTailscaleCert && tls.leafExpiresAt && tls.tlsReady && (
-        <p className="freight-muted">Certificate expires: {new Date(tls.leafExpiresAt).toLocaleString()}</p>
+      {tls.certStatusDetail && !showError && (
+        <p className="freight-muted">{tls.certStatusDetail}</p>
+      )}
+      {tls.validUntil && tls.tlsReady && !tls.usingTailscaleCert && (
+        <p className="freight-muted">Valid until {new Date(tls.validUntil).toLocaleString()}</p>
       )}
       {showError && <p role="alert" className="freight-error">{tls.tlsError}</p>}
       {showError && tls.tlsFixHint && <p className="freight-muted">{tls.tlsFixHint}</p>}

@@ -2,11 +2,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import QRCode from 'qrcode';
 import { detectTailscale } from '../networkAllowlist';
-import { ensureLocalTlsMaterial, leafCoversHost, parseLeafCertInfo } from './localCa';
+import { ensureLocalTlsMaterial, leafCoversHost, parseLeafCertInfo, collectSans } from './localCa';
 import { obtainTailscaleCert, tailscaleCertExpiryIso } from './tailscaleCert';
 import { buildPhoneOrigin } from './phoneUrls';
 import { PHONE_CA_TRUST_PORT } from './caTrustServer';
 import type { PhoneServerTls } from './phoneServer';
+import { createHash } from 'node:crypto';
+import {
+  decideLocalLeafRenewal,
+  decideTailscaleCertRenewal,
+  certNotAfterMs
+} from './certRenewalPolicy';
 
 export type PhoneTlsPublicStatus = {
   tlsReady: boolean;
@@ -31,6 +37,9 @@ export type PhoneTlsPublicStatus = {
   sanCoversHostname: boolean;
   requiresCaTrust: boolean;
   installHttpsUrl: string;
+  /** Human-readable certificate health (renewal / validity). */
+  certStatusDetail: string;
+  validUntil: string;
 };
 
 type Settings = { usePhoneHttps?: boolean; allowInsecureHttp?: boolean };
@@ -44,6 +53,7 @@ export function setPhoneTlsTestMaterial(material: PhoneServerTls | null) {
 const TAILSCALE_SNI_SUFFIX = '.ts.net';
 const MAINTENANCE_MS = 24 * 60 * 60 * 1000;
 const RETRY_MS = 5 * 60 * 1000;
+const STARTUP_TAILSCALE_RETRY_MS = 3 * 60 * 60 * 1000;
 
 export class PhoneTlsManager {
   private settingsPath: string;
@@ -60,6 +70,9 @@ export class PhoneTlsManager {
   private maintenanceTimer?: ReturnType<typeof setInterval>;
   private retryTimer?: ReturnType<typeof setInterval>;
   private hadTlsReady = false;
+  private certStatusDetail = '';
+  private validUntilIso = '';
+  private startupCheckPromise: Promise<void> | null = null;
 
   constructor(userDataDir: string) {
     this.settingsPath = path.join(userDataDir, 'phone-tls-settings.json');
@@ -87,6 +100,30 @@ export class PhoneTlsManager {
     this.retryTimer = setInterval(() => {
       if (this.tlsError || !this.getServerTls()) void this.maintainCertificates();
     }, RETRY_MS);
+  }
+
+  /** Non-blocking startup certificate evaluation (Tailscale + local CA leaf). */
+  runStartupCertificateCheck() {
+    if (!this.startupCheckPromise) {
+      this.startupCheckPromise = this.maintainCertificates(false, { startup: true }).finally(() => {
+        this.startupCheckPromise = null;
+      });
+    }
+    return this.startupCheckPromise;
+  }
+
+  private tlsFingerprint(material: PhoneServerTls): string {
+    const parts = [material.cert, material.key, material.sniCert, material.sniKey].map(v => String(v || ''));
+    return createHash('sha256').update(parts.join('\0')).digest('hex');
+  }
+
+  private formatValidUntil(iso: string): string {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleString();
+    } catch {
+      return iso;
+    }
   }
 
   getPhoneUseHttps() {
@@ -142,20 +179,36 @@ export class PhoneTlsManager {
     };
   }
 
-  async maintainCertificates(forceRenew = false) {
+  async maintainCertificates(forceRenew = false, options?: { startup?: boolean }) {
     const wasReady = !!this.getServerTls();
-    await this.refreshServerTls(this.lastRefreshOpts.useTailscale, this.lastRefreshOpts.hosts, forceRenew);
+    const previousFp = this.serverTls ? this.tlsFingerprint(this.serverTls) : '';
+    await this.refreshServerTls(this.lastRefreshOpts.useTailscale, this.lastRefreshOpts.hosts, {
+      forceTailscaleRenew: forceRenew,
+      forceLocalRenew: forceRenew,
+      startup: options?.startup
+    });
+    const nowFp = this.serverTls ? this.tlsFingerprint(this.serverTls) : '';
+    if (options?.startup && this.serverTls && previousFp && nowFp !== previousFp) {
+      this.certStatusDetail = 'Certificate renewed on startup.';
+      console.info('[PhoneTls] Certificate renewed on startup.');
+    }
     if (!wasReady && this.getServerTls()) await this.notifyReload();
+    else if (nowFp && nowFp !== previousFp && wasReady) await this.notifyReload();
   }
 
-  async refreshServerTls(useTailscale: boolean, extraHosts: string[] = [], forceTailscaleRenew = false) {
+  async refreshServerTls(
+    useTailscale: boolean,
+    extraHosts: string[] = [],
+    options?: { forceTailscaleRenew?: boolean; forceLocalRenew?: boolean; startup?: boolean }
+  ) {
     this.lastRefreshOpts = { useTailscale, hosts: extraHosts };
+    const previousTls = this.serverTls;
+    const previousError = this.tlsError;
     this.tlsError = '';
-    this.serverTls = null;
     this.usingTailscaleCert = false;
     this.tailscaleCertHostname = '';
     this.tailscaleCertExpiresAt = '';
-    this.lastMode = 'pending';
+    let nextMode: PhoneTlsPublicStatus['mode'] = this.lastMode;
 
     if (testTlsOverride) {
       this.serverTls = testTlsOverride;
@@ -171,41 +224,99 @@ export class PhoneTlsManager {
     if (magicHost) {
       try {
         const certDir = path.join(path.dirname(this.settingsPath), 'phone-tailscale-certs');
-        const files = await obtainTailscaleCert(magicHost, certDir, { forceRenew: forceTailscaleRenew });
+        const certPath = path.join(certDir, `${magicHost}.crt`);
+        const existingCert = await fs.readFile(certPath, 'utf8').catch(() => '');
+        const tailDecision = decideTailscaleCertRenewal({ certPem: existingCert, expectedHostname: magicHost });
+        const forceTailscale =
+          !!options?.forceTailscaleRenew ||
+          tailDecision === 'missing' ||
+          tailDecision === 'expired' ||
+          tailDecision === 'expiring_soon' ||
+          tailDecision === 'hostname_mismatch';
+        const files = await obtainTailscaleCert(magicHost, certDir, { forceRenew: forceTailscale });
         tailscaleTls = { cert: files.certPem, key: files.keyPem };
         this.usingTailscaleCert = true;
         this.tailscaleCertHostname = magicHost;
         this.tailscaleCertExpiresAt = tailscaleCertExpiryIso(files.certPem);
+        if (options?.startup && forceTailscale && tailDecision !== 'ok') {
+          console.info('[PhoneTls] Tailscale certificate renewed (' + tailDecision + ').');
+        }
       } catch (e: any) {
         this.tlsError = 'Tailscale certificate failed: ' + (e.message || String(e));
+        if (options?.startup) {
+          this.certStatusDetail = 'Tailscale certificate not ready yet. Will retry automatically.';
+          console.warn('[PhoneTls] Tailscale certificate unavailable at startup:', e.message || String(e));
+        }
       }
+    } else if (options?.startup && useTailscale) {
+      this.certStatusDetail = 'Tailscale is not running. HTTPS uses the local CA until Tailscale is available.';
     }
 
     const lanHosts = [...new Set([...extraHosts, tailscale.address, '127.0.0.1'].filter(Boolean) as string[])];
+    const sans = collectSans(lanHosts);
     try {
       const userDataDir = path.dirname(this.settingsPath);
-      const material = await ensureLocalTlsMaterial(userDataDir, false, lanHosts);
+      const metaPath = path.join(userDataDir, 'phone-local-ca', 'server-meta.json');
+      let storedSansKey = '';
+      try {
+        storedSansKey = JSON.parse(await fs.readFile(metaPath, 'utf8')).sansKey || '';
+      } catch { /* ignore */ }
+      const existingLeaf = await fs.readFile(path.join(userDataDir, 'phone-local-ca', 'server.crt'), 'utf8').catch(() => '');
+      const leafDecision = decideLocalLeafRenewal({
+        certPem: existingLeaf,
+        requiredSans: sans,
+        storedSansKey
+      });
+      const forceLocal =
+        !!options?.forceLocalRenew ||
+        leafDecision === 'missing' ||
+        leafDecision === 'expired' ||
+        leafDecision === 'expiring_soon' ||
+        leafDecision === 'sans_mismatch';
+      const material = await ensureLocalTlsMaterial(userDataDir, forceLocal, lanHosts);
       this.localCaPem = material.caCertPem;
       this.localFingerprint = material.fingerprintSha256;
       localTls = { cert: material.serverCertPem, key: material.serverKeyPem };
-      if (!tailscaleTls) this.lastMode = 'local';
+      const leafExpiry = certNotAfterMs(material.serverCertPem);
+      if (leafExpiry) this.validUntilIso = new Date(leafExpiry).toISOString();
+      if (options?.startup && forceLocal && leafDecision !== 'ok') {
+        console.info('[PhoneTls] Local leaf certificate regenerated (' + leafDecision + ').');
+      }
+      if (!tailscaleTls) nextMode = 'local';
     } catch (e: any) {
       const msg = 'Local HTTPS certificate failed: ' + (e.message || String(e));
       this.tlsError = this.tlsError ? `${this.tlsError} · ${msg}` : msg;
     }
 
+    let nextTls: PhoneServerTls | null = null;
     if (tailscaleTls && localTls) {
-      this.serverTls = this.buildSniBundle(localTls, tailscaleTls);
-      this.lastMode = 'tailscale';
+      nextTls = this.buildSniBundle(localTls, tailscaleTls);
+      nextMode = 'tailscale';
     } else if (localTls) {
-      this.serverTls = localTls;
-      this.lastMode = 'local';
+      nextTls = localTls;
+      nextMode = 'local';
     } else if (tailscaleTls) {
-      this.serverTls = tailscaleTls;
-      this.lastMode = 'tailscale';
+      nextTls = tailscaleTls;
+      nextMode = 'tailscale';
     } else {
-      this.lastMode = 'unavailable';
+      nextMode = 'unavailable';
       if (!this.tlsError) this.tlsError = 'HTTPS certificate is not ready. Phone tools stay offline until a certificate works.';
+    }
+
+    if (nextTls) {
+      this.serverTls = nextTls;
+      this.lastMode = nextMode;
+      if (!this.certStatusDetail) {
+        const until = this.tailscaleCertExpiresAt || this.validUntilIso;
+        this.certStatusDetail = until ? `Valid until ${this.formatValidUntil(until)}.` : 'Certificate is valid.';
+      }
+    } else if (previousTls) {
+      this.serverTls = previousTls;
+      this.tlsError = this.tlsError || previousError;
+      this.lastMode = previousTls.sniCert ? 'tailscale' : 'local';
+    } else {
+      this.serverTls = null;
+      this.lastMode = 'unavailable';
     }
     this.hadTlsReady = !!this.serverTls;
   }
@@ -305,7 +416,9 @@ export class PhoneTlsManager {
       tailscaleCertExpiresAt: this.tailscaleCertExpiresAt,
       sanCoversHostname,
       requiresCaTrust,
-      installHttpsUrl: installUrl
+      installHttpsUrl: installUrl,
+      certStatusDetail: this.certStatusDetail,
+      validUntil: this.validUntilIso || leafExpiresAt || this.tailscaleCertExpiresAt
     };
   }
 
