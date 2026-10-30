@@ -11,6 +11,10 @@ const PNG = Buffer.from(
   'base64',
 );
 
+async function progressFillPercent(page: import('@playwright/test').Page) {
+  return page.evaluate(() => parseFloat(document.getElementById('upload-progress-fill')?.style.width || '0') || 0);
+}
+
 async function launchFreightApp(storage: string) {
   const profile = path.dirname(storage);
   const env: Record<string, string> = {
@@ -80,11 +84,11 @@ test('close page mid-upload then reopen and finish without duplicates', async ({
     });
 
     await startTwoPictureUpload(mobile, localUrl);
-    await expect(mobile.locator('#message')).toContainText(/Connection interrupted|Retry upload/);
+    await expect(mobile.locator('#upload-error')).toContainText(/Connection interrupted|Upload failed/i);
 
     await mobile.unroute(/\/file\?/);
     await mobile.reload();
-    await expect(mobile.locator('#message')).toContainText('verified', { timeout: 120000 });
+    await expect(mobile.locator('#upload-status')).toContainText('Done, 2 pictures uploaded', { timeout: 120000 });
 
     expect(await readdir(shipment.folder)).toHaveLength(2);
     await mobile.close();
@@ -116,11 +120,11 @@ test('offline mid-upload then online resumes', async ({ browser }) => {
     });
 
     await startTwoPictureUpload(mobile, localUrl);
-    await expect(mobile.locator('#message')).toContainText(/Connection interrupted|Retry upload/);
+    await expect(mobile.locator('#upload-error')).toContainText(/Connection interrupted|Upload failed/i);
 
     await mobile.unroute(/\/file\?/);
-    await mobile.getByRole('button', { name: 'Retry upload', exact: true }).click();
-    await expect(mobile.locator('#message')).toContainText('verified', { timeout: 120000 });
+    await mobile.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(mobile.locator('#upload-status')).toContainText('Done, 2 pictures uploaded', { timeout: 120000 });
     expect(await readdir(shipment.folder)).toHaveLength(2);
     await mobile.close();
   } finally {
@@ -151,14 +155,14 @@ test('resume after one picture completes does not throw on progress bar', async 
     });
 
     await startTwoPictureUpload(mobile, localUrl);
-    await expect(mobile.locator('#message')).toContainText(/Connection interrupted|Retry upload|Resuming upload/);
+    await expect(mobile.locator('#upload-error')).toContainText(/Connection interrupted|Upload failed/i);
 
     await mobile.unroute(/\/file\?/);
     await mobile.reload();
-    await expect(mobile.locator('#message')).toContainText('Resuming upload: 2 of 2', { timeout: 15000 });
-    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0))).toBeGreaterThan(0);
-    await expect(mobile.locator('#message')).toContainText('verified', { timeout: 120000 });
-    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0))).toBe(100);
+    await expect(mobile.locator('#upload-status')).toContainText(/Uploading picture 2 of 2|Connection interrupted|Upload failed/, { timeout: 15000 });
+    await expect.poll(async () => progressFillPercent(mobile)).toBeGreaterThan(0);
+    await expect(mobile.locator('#upload-status')).toContainText('Done, 2 pictures uploaded', { timeout: 120000 });
+    await expect.poll(async () => progressFillPercent(mobile)).toBe(100);
     expect(await readdir(shipment.folder)).toHaveLength(2);
     await mobile.close();
   } finally {
@@ -182,9 +186,9 @@ test('fresh two-picture upload advances progress bar to full', async ({ browser 
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     await startTwoPictureUpload(mobile, localUrl);
-    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0)), { timeout: 60000 }).toBeGreaterThan(0);
-    await expect(mobile.locator('#message')).toContainText('verified', { timeout: 120000 });
-    await expect.poll(async () => mobile.evaluate(() => Number((document.getElementById('progress') as HTMLProgressElement)?.value || 0))).toBe(100);
+    await expect.poll(async () => progressFillPercent(mobile), { timeout: 60000 }).toBeGreaterThan(0);
+    await expect(mobile.locator('#upload-status')).toContainText('Done, 2 pictures uploaded', { timeout: 120000 });
+    await expect.poll(async () => progressFillPercent(mobile)).toBe(100);
     expect(await readdir(shipment.folder)).toHaveLength(2);
     await mobile.close();
   } finally {
@@ -213,7 +217,7 @@ test('new shipment opens while another upload is pending does not reopen the old
       else await route.continue();
     });
     await startTwoPictureUpload(mobile, pawUrl);
-    await expect(mobile.locator('#message')).toContainText(/Connection interrupted|Retry upload/);
+    await expect(mobile.locator('#upload-error')).toContainText(/Connection interrupted|Upload failed/i);
     await mobile.unroute(/\/file\?/);
 
     await mobile.getByRole('button', { name: 'Back / New shipment', exact: true }).click();
@@ -256,11 +260,11 @@ test('closing the page mid-resume lets the service worker finish remaining files
     });
 
     await startTwoPictureUpload(mobile, localUrl);
-    await expect(mobile.locator('#message')).toContainText(/Connection interrupted|Retry upload/);
+    await expect(mobile.locator('#upload-error')).toContainText(/Connection interrupted|Upload failed/i);
 
     await mobile.unroute(/\/file\?/);
     await mobile.reload();
-    await expect(mobile.locator('#message')).toContainText('Resuming upload: 2 of 2', { timeout: 15000 });
+    await expect(mobile.locator('#upload-status')).toContainText('Uploading picture 2 of 2', { timeout: 15000 });
     await mobile.close();
 
     await expect.poll(async () => (await readdir(shipment.folder)).length, { timeout: 120000 }).toBe(2);
@@ -292,7 +296,7 @@ test('cancel during resume deletes the batch', async ({ browser }) => {
     });
 
     await startTwoPictureUpload(mobile, localUrl);
-    await expect(mobile.locator('#message')).toContainText(/Connection interrupted|Retry upload/);
+    await expect(mobile.locator('#upload-error')).toContainText(/Connection interrupted|Upload failed/i);
 
     await mobile.unroute(/\/file\?/);
     await mobile.route(/\/finish/, async route => {
@@ -300,7 +304,7 @@ test('cancel during resume deletes the batch', async ({ browser }) => {
       await route.continue();
     });
     await mobile.reload();
-    await expect(mobile.locator('#message')).toContainText('Verifying every picture');
+    await expect(mobile.locator('#upload-status')).toContainText('Verifying pictures');
     await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
     await mobile.unroute(/\/finish/);
     await expect(mobile.locator('#message')).toContainText('Upload canceled');

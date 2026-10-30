@@ -67,7 +67,7 @@ test('desktop subfolder routes phone upload to sanitized path', async ({ browser
   await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
   const batchBody = (await batchRequest).postDataJSON();
   expect(batchBody.folderName).toBeUndefined();
-  await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
+    await expect(mobile.locator('#upload-status')).toContainText('Done, 1 pictures uploaded');
   const subPath = path.join(shipment.folder, 'Trailers');
   const subFiles = await readdir(subPath);
   expect(subFiles).toHaveLength(1);

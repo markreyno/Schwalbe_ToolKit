@@ -90,11 +90,24 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       });
 
       await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-      await expect(mobile.locator('#upload-progress-panel')).toBeVisible();
+      await expect(mobile.locator('#upload-session')).toBeVisible();
+      await expect(mobile.locator('#upload-company')).toHaveText('Mobile Flow Co');
+      await expect(mobile.locator('#upload-status')).toContainText('Uploading picture 1 of 1');
+      await expect(mobile.locator('#saving-to')).toBeHidden();
+      await expect(mobile.locator('#upload-leave-hint')).toHaveCount(0);
+      await expect(mobile.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
+      await expect(mobile.getByRole('button', { name: 'Cancel upload' })).toBeVisible();
+      const fill = mobile.locator('#upload-progress-fill');
+      await expect.poll(async () => parseFloat((await fill.getAttribute('style'))?.match(/width:\s*([\d.]+)/)?.[1] || '0')).toBeLessThan(5);
       await mobile.screenshot({ path: path.join(artifactDir, '02-uploading.png'), fullPage: true });
 
       releaseFile?.();
-      await expect(mobile.locator('#message')).toContainText('pallet pictures verified', { timeout: 15000 });
+      await expect.poll(async () => parseFloat((await fill.getAttribute('style'))?.match(/width:\s*([\d.]+)/)?.[1] || '0'), { timeout: 15000 }).toBeGreaterThan(10);
+      await expect(mobile.locator('#upload-status')).toContainText('Done, 1 pictures uploaded', { timeout: 15000 });
+      await expect(mobile.getByRole('button', { name: 'New shipment', exact: true })).toBeVisible();
+      await mobile.getByRole('button', { name: 'New shipment', exact: true }).click();
+      await expect(mobile.locator('#shipment-setup')).toBeVisible();
+      await expect(mobile.getByLabel('Company', { exact: true })).toBeVisible();
 
       const dockA = path.join(shipment.folder, 'Dock A');
       expect((await readdir(dockA)).length).toBe(1);

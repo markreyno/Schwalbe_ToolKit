@@ -1,12 +1,10 @@
 const key = new URLSearchParams(location.search).get('key');
 const ACTIVE_SESSION_KEY = 'schwalbe-freight-phone-active';
-const LEAVE_PAGE_HINT = 'Installed Connect PWA: pictures can keep uploading with the screen locked. A normal Chrome tab only continues while Android keeps the tab alive — install the PWA for reliable background upload.';
-const BACKGROUND_ACTIVE_HINT = 'Upload continues in the background. You can lock your phone or switch apps.';
-const TAB_BACKGROUND_LIMIT_HINT = 'Chrome tab: upload may pause when the tab is closed. Install the Connect PWA from the hub for Background Fetch.';
 const el = id => document.getElementById(id);
 const uploadQueue = () => window.FreightUploadQueue;
 let selected = [], batch = null, busy = false, mode = false, urls = [], activeXhr = null, uploadCanceled = false, finishAbort = null;
 let saveTarget = '', uiPhase = 'pick', activeProgressPending = null, uploadSwReady = null, activeUploadChannel = 'page', swProgressListener = null;
+let cardCompany = '', cardDateIso = '';
 
 function pendingBytesApi() {
   const Q = uploadQueue();
@@ -15,12 +13,17 @@ function pendingBytesApi() {
 
 /** Progress bar uses 0–100% from bytes uploaded / total bytes (works on Android Chrome). */
 function setUploadProgressBytes(doneBytes, totalBytes) {
-  const progress = el('progress');
+  const fill = el('upload-progress-fill');
+  const track = el('upload-progress-track');
   const total = Math.max(1, Number(totalBytes) || 1);
   let done = Number(doneBytes);
   if (!Number.isFinite(done)) done = 0;
-  progress.max = 100;
-  progress.value = Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+  const pct = Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+  if (fill) fill.style.width = pct + '%';
+  if (track) {
+    track.setAttribute('aria-valuenow', String(pct));
+    track.setAttribute('aria-valuetext', pct + '%');
+  }
 }
 
 function syncProgressFromPending(pending, extraDoneBytes) {
@@ -39,13 +42,51 @@ function resetUploadProgress() {
   setUploadProgressBytes(0, 1);
 }
 
-function uploadProgressLabel(pending, resuming) {
+function uploadProgressLabel(pending) {
   const Q = uploadQueue();
   if (!Q || !pending) return '';
   const { total, uploaded } = Q.pendingProgress(pending);
   const next = Math.min(uploaded + 1, total);
-  const prefix = resuming && uploaded > 0 ? 'Resuming upload: ' : 'Uploading picture ';
-  return prefix + next + ' of ' + total + '…';
+  return 'Uploading picture ' + next + ' of ' + total;
+}
+
+function formatDisplayDate(iso) {
+  if (!iso) return '';
+  const parts = iso.split('-');
+  if (parts.length !== 3) return iso;
+  return Number(parts[1]) + '/' + Number(parts[2]) + '/' + parts[0];
+}
+
+function setUploadCardMeta(company, dateIso) {
+  cardCompany = company || '';
+  cardDateIso = dateIso || '';
+  if (el('upload-company')) el('upload-company').textContent = cardCompany;
+  if (el('upload-date')) el('upload-date').textContent = formatDisplayDate(cardDateIso);
+}
+
+function setUploadStatus(text) {
+  if (el('upload-status')) el('upload-status').textContent = text || '';
+}
+
+function setUploadError(text) {
+  const node = el('upload-error');
+  if (!node) return;
+  if (text) { node.hidden = false; node.textContent = text; }
+  else { node.hidden = true; node.textContent = ''; }
+}
+
+function setPickChromeVisible(visible) {
+  if (el('pick-chrome')) el('pick-chrome').hidden = !visible;
+}
+
+function refreshUploadSessionChrome() {
+  const done = uiPhase === 'done';
+  const error = uiPhase === 'error';
+  if (el('upload-done-mark')) el('upload-done-mark').hidden = !done;
+  if (el('upload-cancel-link')) el('upload-cancel-link').hidden = done;
+  if (el('upload-retry')) el('upload-retry').hidden = !error;
+  if (el('upload-new-shipment')) el('upload-new-shipment').hidden = !done;
+  if (el('upload-progress-fill')) el('upload-progress-fill').classList.toggle('is-done', done);
 }
 
 function isResumeUpload(pending) {
@@ -61,6 +102,7 @@ function todayLocalIso() {
 
 function setShipmentTitle(company, date) {
   el('title').textContent = company + ' · ' + date;
+  setUploadCardMeta(company, date);
 }
 
 function setSavingTo(label) {
@@ -85,13 +127,14 @@ function showShipmentSetup(prefillCompany, prefillDate) {
 function setPhase(phase) {
   uiPhase = phase;
   const picking = phase === 'pick';
-  const uploading = phase === 'uploading';
-  const result = phase === 'done' || phase === 'error';
+  const session = phase === 'uploading' || phase === 'done' || phase === 'error';
   el('capture-block').hidden = !picking;
-  el('upload-progress-panel').hidden = !uploading;
-  el('upload-result').hidden = phase !== 'error';
+  el('upload-session').hidden = !session;
+  setPickChromeVisible(picking);
+  if (el('new-shipment-nav')) el('new-shipment-nav').hidden = !(picking || phase === 'error');
   el('send').hidden = !picking || busy;
-  el('retry-upload').hidden = phase !== 'error';
+  refreshUploadSessionChrome();
+  if (session) message('');
 }
 
 function markActiveShipmentSession() {
@@ -221,10 +264,7 @@ function uploadPicture(blob, index, hash, pending) {
       if (uploadCanceled) return;
       if (e.lengthComputable && e.total > 0) {
         syncProgressFromPending(pending, e.loaded);
-        const Q = uploadQueue();
-        const total = pending?.files?.length || 1;
-        const fraction = e.loaded / e.total;
-        message('Uploading picture ' + (index + 1) + ' of ' + total + ' · ' + Math.round(fraction * 100) + '%' + (fraction === 1 ? ' — saving on desktop…' : '') + '\n' + LEAVE_PAGE_HINT);
+        setUploadStatus(uploadProgressLabel(pending));
       }
     };
     xhr.onload = () => {
@@ -266,6 +306,7 @@ function resetSendButton() {
 
 function goToPickStep() {
   setCaptureDisabled(false);
+  setUploadError('');
   setPhase('pick');
   resetSendButton();
   valid();
@@ -284,10 +325,11 @@ async function resetAfterCancel() {
   message('Upload canceled');
 }
 
-el('back-to-photos-upload').onclick = () => { void returnToPickFromUpload(); };
-el('cancel-upload').onclick = () => { void resetAfterCancel(); };
+el('upload-cancel-link').onclick = () => { void resetAfterCancel(); };
 
-el('retry-upload').onclick = () => { if (busy) return; void runUpload(); };
+el('upload-retry').onclick = () => { if (busy) return; setUploadError(''); void runUpload(true); };
+
+el('upload-new-shipment').onclick = () => showShipmentSetup('', todayLocalIso());
 
 el('new-shipment-nav').onclick = () => showShipmentSetup('', todayLocalIso());
 el('new-shipment-form').onsubmit = async e => {
@@ -446,7 +488,7 @@ async function syncUploadProgressFromQueue() {
   syncProgressFromPending(pending, 0);
   const { total, uploaded } = Q.pendingProgress(pending);
   if (uploaded > 0 && uploaded < total && isResumeUpload(pending)) {
-    message(uploadProgressLabel(pending, true) + '\n' + LEAVE_PAGE_HINT);
+    setUploadStatus(uploadProgressLabel(pending));
   }
 }
 
@@ -481,7 +523,7 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
       downloadTotal
     });
     const resumeLabel = resuming && isResumeUpload(pending);
-    message((resumeLabel ? uploadProgressLabel(pending, true) : uploadProgressLabel(pending, false)) + '\n' + BACKGROUND_ACTIVE_HINT + '\n' + LEAVE_PAGE_HINT);
+    setUploadStatus(resumeLabel ? uploadProgressLabel(pending) : uploadProgressLabel(pending));
     const onProgress = () => {
       if (uploadCanceled) return;
       const bytesTotal = Math.max(1, bg.downloadTotal || downloadTotal);
@@ -520,7 +562,7 @@ async function waitForServiceWorkerQueueDrain(pending, actuallyResuming) {
     syncProgressFromPending(pending, 0);
     const { uploaded, remaining } = Q.pendingProgress(pending);
     if (remaining === 0) return pending;
-    message((actuallyResuming ? uploadProgressLabel(pending, true) : uploadProgressLabel(pending, false)) + '\n' + LEAVE_PAGE_HINT);
+    setUploadStatus(actuallyResuming ? uploadProgressLabel(pending) : uploadProgressLabel(pending));
     if (uploaded > lastUploaded) {
       lastUploaded = uploaded;
       stalledAt = Date.now();
@@ -543,7 +585,7 @@ async function uploadRemainingViaPageXHR(pending, actuallyResuming) {
     pending = await Q.getPending();
     if (pending.uploadedIndices.includes(i)) continue;
     const fileRec = Q.materializeFile(pending.files[i]);
-    message((actuallyResuming ? uploadProgressLabel(pending, true) : uploadProgressLabel(pending, false)) + '\n' + LEAVE_PAGE_HINT);
+    setUploadStatus(uploadProgressLabel(pending));
     await uploadPicture(fileRec.blob, i, fileRec.hash, pending);
     if (uploadCanceled) break;
     await Q.markIndexUploaded(i);
@@ -553,7 +595,7 @@ async function uploadRemainingViaPageXHR(pending, actuallyResuming) {
 }
 
 async function finalizeVerifiedUpload(pending) {
-  message('Verifying every picture on the desktop…');
+  setUploadStatus('Verifying pictures…');
   finishAbort = new AbortController();
   await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
   finishAbort = null;
@@ -561,9 +603,10 @@ async function finalizeVerifiedUpload(pending) {
   await uploadQueue().clearPending();
   const bytesApi = pendingBytesApi();
   if (pending && bytesApi) setUploadProgressBytes(bytesApi.total(pending), bytesApi.total(pending));
-  setPhase('done');
   const total = pending?.files?.length || 0;
-  message('Complete: ' + total + ' pallet pictures verified and saved on the desktop. This shipment link is now closed.');
+  setUploadError('');
+  setPhase('done');
+  setUploadStatus('Done, ' + total + ' pictures uploaded');
 }
 
 async function drainUploadQueue(resuming) {
@@ -604,7 +647,6 @@ async function drainUploadQueue(resuming) {
   }
   if (Q.pendingProgress(pending).remaining > 0) {
     if (!preferServiceWorkerDrain) await reportUploadChannel('page');
-    else if (!isInstalledPwa()) message(TAB_BACKGROUND_LIMIT_HINT + '\n' + LEAVE_PAGE_HINT);
     await uploadRemainingViaPageXHR(pending, actuallyResuming);
   }
   if (uploadCanceled) return;
@@ -620,11 +662,11 @@ async function runUpload(resuming) {
   valid();
   setPhase('uploading');
   setCaptureDisabled(true);
+  setUploadError('');
   try {
     const Q = uploadQueue();
     if (!Q) throw Error('Upload queue is unavailable. Refresh and try again.');
     if (!resuming) {
-      message('Saving pictures on this device before upload…\n' + LEAVE_PAGE_HINT);
       const hashFile = async file => {
         const prepared = await preparePicture(file);
         if (prepared.error) throw Error(prepared.error);
@@ -636,7 +678,13 @@ async function runUpload(resuming) {
         files: selected,
         hashFile
       });
-      syncProgressFromPending(await Q.getPending(), 0);
+      const pending = await Q.getPending();
+      syncProgressFromPending(pending, 0);
+      setUploadStatus(uploadProgressLabel(pending));
+    } else {
+      const pending = await Q.getPending();
+      syncProgressFromPending(pending, 0);
+      setUploadStatus(uploadProgressLabel(pending));
     }
     await drainUploadQueue(!!resuming);
   } catch (e) {
@@ -648,8 +696,10 @@ async function runUpload(resuming) {
       return;
     }
     setPhase('error');
-    message(e.message + ' Your pictures stay saved on this device. Reopen Freight Pictures or tap Retry upload.\n' + LEAVE_PAGE_HINT);
-    el('send').textContent = 'Retry Upload';
+    const Q = uploadQueue();
+    const pending = Q ? await Q.getPending().catch(() => null) : null;
+    setUploadError(e.message);
+    setUploadStatus(pending ? uploadProgressLabel(pending) : 'Upload failed');
     if (/expired|not a valid image/.test(e.message)) batch = null;
   } finally {
     finishAbort = null;
@@ -680,7 +730,7 @@ async function resumePendingUploadIfAny(state) {
     el('send').textContent = mode ? 'Reupload All' : 'Upload All';
   }
   el('pallets').value = String(pending.pallets);
-  message(uploadProgressLabel(pending, true) + '\n' + LEAVE_PAGE_HINT);
+  setUploadStatus(uploadProgressLabel(pending));
   await runUpload(true);
   return true;
 }
@@ -717,7 +767,7 @@ async function reconcileUploadAfterForegroundReturn() {
       busy = false;
       setCaptureDisabled(false);
       setPhase('done');
-      message('Complete: shipment verified and saved on the desktop. This shipment link is now closed.');
+      setUploadStatus('Done, shipment pictures uploaded');
     }
   } catch { /* ignore */ }
 }
