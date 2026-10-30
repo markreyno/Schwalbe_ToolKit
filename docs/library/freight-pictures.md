@@ -27,7 +27,7 @@ Collect **one picture per pallet** from a phone over your private network. Origi
 6. Enter the pallet count, check the confirmation box, then tap **Upload All** to start uploading immediately (no second confirmation screen).
 7. During upload use **Back** or **Cancel upload** as needed. The progress bar shows percent complete. While pictures are uploading you will see guidance about background upload on Android Chrome (installed PWA).
 8. Tap the **Home** arrow (top-left) to return to the Connect PWA hub. If an upload is in progress, confirm or cancel first.
-9. The footer shows the app version (e.g. v1.6.9) so you can confirm which build loaded.
+9. The footer shows the app version (e.g. v1.7.0) so you can confirm which build loaded.
 
 Stale or empty saved upload queues from an older app version are cleared automatically when you open Freight without a shipment link. A real in-progress upload may finish in the background without leaving the New shipment page.
 
