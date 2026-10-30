@@ -107,7 +107,7 @@ test.describe('Freight mobile flow (mobile viewport)', () => {
       await expect(mobile.getByRole('button', { name: 'New shipment', exact: true })).toBeVisible();
       await mobile.getByRole('button', { name: 'New shipment', exact: true }).click();
       await expect(mobile.locator('#shipment-setup')).toBeVisible();
-      await expect(mobile.getByLabel('Company', { exact: true })).toBeVisible();
+      await expect(mobile.locator('#new-company')).toBeVisible();
 
       const dockA = path.join(shipment.folder, 'Dock A');
       expect((await readdir(dockA)).length).toBe(1);
