@@ -37,7 +37,7 @@ test('freight mobile upload verifies original files, closes links, reuploads and
     await expect(mobile.locator('#message')).toContainText('up to 26 pictures');
     await expect(mobile.locator('#count')).toHaveText('2 pictures / 2 pallets');
     const pictureHash = createHash('sha256').update(bytes).digest('hex');
-    const oldLink = mobile.url(); const batchRequest = mobile.waitForRequest(r => r.url().includes('/batch?')); await mobile.getByRole('button', { name: 'Upload All', exact: true }).click(); expect((await batchRequest).postDataJSON().files[0].hash).toBe(pictureHash); await expect(mobile.locator('#message')).toContainText('2 pallet pictures verified');
+    const oldLink = mobile.url(); const batchRequest = mobile.waitForRequest(r => r.url().includes('/batch?')); await mobile.getByRole('button', { name: 'Upload All', exact: true }).click(); expect((await batchRequest).postDataJSON().files[0].hash).toBe(pictureHash); await expect(mobile.locator('#upload-status')).toContainText('Done, 2 pictures uploaded');
     state = await page.evaluate(() => window.toolkit.freight('status')); const shipment = state.shipments.find(s => s.company === 'Phone Company')!;
     expect(shipment.closed).toBe(true); expect(shipment.pictures).toBe(2);
     const fs = await import('node:fs/promises'); const files = await fs.readdir(shipment.folder); expect(files).toHaveLength(2); for (const f of files) expect(await readFile(path.join(shipment.folder, f))).toEqual(bytes);
@@ -46,7 +46,7 @@ test('freight mobile upload verifies original files, closes links, reuploads and
     state = await page.evaluate(() => window.toolkit.freight('status')); const reopened = state.shipments.find(s => s.id === shipment.id)!;
     expect(reopened.url).not.toBe(shipment.url); await mobile.goto(oldLink); await expect(mobile.locator('body')).toContainText('Invalid Freight Pictures link');
     await mobile.goto(local(reopened.url)); await expect(mobile.getByRole('button', { name: 'Reupload All' })).toBeVisible();
-    await mobile.locator('#files').setInputFiles({ name: 'extra.png', mimeType: 'image/png', buffer: bytes }); await mobile.getByLabel('Pallet amount', { exact: true }).fill('1'); await mobile.locator('#confirm').check(); await mobile.getByRole('button', { name: 'Reupload All' }).click(); await expect(mobile.locator('#message')).toContainText('1 pallet pictures verified');
+    await mobile.locator('#files').setInputFiles({ name: 'extra.png', mimeType: 'image/png', buffer: bytes }); await mobile.getByLabel('Pallet amount', { exact: true }).fill('1'); await mobile.locator('#confirm').check(); await mobile.getByRole('button', { name: 'Reupload All' }).click(); await expect(mobile.locator('#upload-status')).toContainText('Done, 1 pictures uploaded');
     expect(await fs.readdir(shipment.folder)).toHaveLength(3);
     await mobile.close();
     // Wrong checksums cannot close a shipment; retry is idempotent and a second uploader is blocked.

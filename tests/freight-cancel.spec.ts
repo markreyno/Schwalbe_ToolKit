@@ -72,7 +72,7 @@ test('cancel upload removes partial files and releases the batch lock immediatel
     await mobile.unroute(/\/file\?/);
     await mobile.locator('#confirm').check();
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
-    await expect(mobile.locator('#message')).toContainText('pallet pictures verified');
+    await expect(mobile.locator('#upload-status')).toContainText('Done, 2 pictures uploaded');
     expect(await fs.readdir(shipment.folder)).toHaveLength(2);
 
     await mobile.close();
