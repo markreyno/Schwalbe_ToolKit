@@ -9,20 +9,16 @@ self.addEventListener('activate', event => {
   event.waitUntil(self.clients.claim());
 });
 
-async function hasVisibleClient() {
+async function hasClient() {
   try {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const client of clients) {
-      if (client.visibilityState === 'visible') {
-        return true;
-      }
-    }
+    const clients = await self.clients.matchAll({ type: 'window' });
+    return clients.length > 0;
   } catch {}
   return false;
 }
 
 async function finishIfQueueComplete(batchId, key) {
-  if (await hasVisibleClient()) {
+  if (await hasClient()) {
     return;
   }
   const Q = self.FreightUploadQueue;
@@ -114,7 +110,7 @@ self.addEventListener('backgroundfetchsuccess', event => {
     if (!batchId) return;
     const key = await markIndicesFromBackgroundFetch(reg);
     if (!key) return;
-    if (await hasVisibleClient()) {
+    if (await hasClient()) {
       broadcastUploadProgress(await self.FreightUploadQueue.getPending());
       await event.updateUI({ title: 'Freight pictures uploaded' });
     } else {
