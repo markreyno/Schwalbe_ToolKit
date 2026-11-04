@@ -15,6 +15,8 @@ import { FREIGHT_PHONE_PORT } from './toolPhoneUrls';
 
 /** In-memory upload batch lock duration; overridable in tests via FREIGHT_BATCH_TTL_MS. */
 export const FREIGHT_BATCH_TTL_MS = Number(process.env.FREIGHT_BATCH_TTL_MS) > 0 ? Number(process.env.FREIGHT_BATCH_TTL_MS) : 60000;
+/** After every file is saved, wait this long for an explicit /finish or /cancel before auto-finishing. */
+export const FREIGHT_FINISH_GRACE_MS = Number(process.env.FREIGHT_FINISH_GRACE_MS) > 0 ? Number(process.env.FREIGHT_FINISH_GRACE_MS) : 20000;
 
 const phoneHubNavJs = () => readFileSync(path.join(__dirname, 'phoneHubNav.js'), 'utf8');
 const freightUploadQueueJs = () => readFileSync(path.join(__dirname, 'freightUploadQueue.js'), 'utf8');
@@ -59,6 +61,8 @@ export class FreightServer {
   private error = '';
   private writing = false;
   private writingBatchId?: string;
+  private finishGraceTimer?: ReturnType<typeof setTimeout>;
+  private finishGraceBatchId?: string;
   private persistence: Promise<void> = Promise.resolve();
   constructor(private settings: string, private tlsManager: PhoneTlsManager) {}
   async start() {
@@ -111,7 +115,60 @@ export class FreightServer {
       this.error = e.message || String(e);
     }
   }
-  stop() { void this.phoneHandle?.close(); }
+  stop() {
+    this.clearFinishGrace();
+    void this.phoneHandle?.close();
+  }
+  private clearFinishGrace() {
+    if (this.finishGraceTimer) clearTimeout(this.finishGraceTimer);
+    this.finishGraceTimer = undefined;
+    this.finishGraceBatchId = undefined;
+  }
+  private scheduleFinishGrace(batch: Batch) {
+    if (!batch || this.canceledBatches.has(batch.id) || this.batchHasUnfinishedFiles(batch)) return;
+    this.clearFinishGrace();
+    const batchId = batch.id;
+    this.finishGraceBatchId = batchId;
+    this.finishGraceTimer = setTimeout(() => {
+      void this.autoFinishBatch(batchId);
+    }, FREIGHT_FINISH_GRACE_MS);
+  }
+  private async autoFinishBatch(batchId: string) {
+    this.finishGraceTimer = undefined;
+    this.finishGraceBatchId = undefined;
+    const batch = this.batch;
+    if (!batch || batch.id !== batchId) return;
+    if (this.canceledBatches.has(batchId) || this.batchHasUnfinishedFiles(batch)) return;
+    if (this.writing) {
+      this.scheduleFinishGrace(batch);
+      return;
+    }
+    try {
+      await this.completeBatch(batch);
+    } catch { /* leave the batch open so the phone can retry or cancel */ }
+  }
+  private async completeBatch(batch: Batch) {
+    if (this.canceledBatches.has(batch.id)) throw new Error('Upload canceled');
+    const shipment = batch.shipment;
+    for (const f of batch.files) {
+      if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.');
+      const bytes = await fs.readFile(f.saved);
+      if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.');
+    }
+    shipment.closed = true;
+    shipment.pictures += batch.files.length;
+    shipment.lastUploadSubfolder = batch.uploadFolderLabel;
+    try {
+      await this.persist();
+    } catch (e) {
+      shipment.closed = false;
+      shipment.pictures -= batch.files.length;
+      throw e;
+    }
+    if (this.batch === batch) this.batch = undefined;
+    this.clearFinishGrace();
+    return batch.files.length;
+  }
   private persist() {
     const snapshot = JSON.stringify({ root: this.root, master: this.master, shipments: this.shipments, useTailscale: this.useTailscale });
     const next = this.persistence.catch(() => {}).then(async () => { await fs.mkdir(path.dirname(this.settings), { recursive: true }); const temp = this.settings + '.tmp'; await fs.writeFile(temp, snapshot); await fs.rename(temp, this.settings); });
@@ -150,6 +207,7 @@ export class FreightServer {
     } catch { /* not empty or missing */ }
   }
   private async abandonBatch() {
+    this.clearFinishGrace();
     const batch = this.batch;
     this.batch = undefined;
     if (!batch) return;
@@ -417,7 +475,10 @@ export class FreightServer {
     }
     if (!shipment || shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
     if (req.method === 'POST' && url.pathname === '/cancel-active') {
-      if (this.batch && this.batch.shipment === shipment) await this.abandonBatch();
+      if (this.batch && this.batch.shipment === shipment) {
+        this.canceledBatches.add(this.batch.id);
+        await this.abandonBatch();
+      }
       json({ canceled: true });
       return;
     }
@@ -464,6 +525,7 @@ export class FreightServer {
       for (const f of data.files) if (typeof f.name !== 'string' || !/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(f.name) || !Number.isInteger(f.size) || f.size < 1 || f.size > 100 * 1024 * 1024 || (f.hash !== undefined && !/^[a-f0-9]{64}$/.test(f.hash))) throw new Error('Choose image files up to 100 MB each.');
       const uploadDir = this.uploadDirForShipment(shipment);
       await fs.mkdir(uploadDir, { recursive: true });
+      this.clearFinishGrace();
       this.batch = {
         id: token(),
         shipment,
@@ -493,8 +555,19 @@ export class FreightServer {
       json({ canceled: true });
       return;
     }
+    const requestedBatchId = url.searchParams.get('batch');
+    if (
+      requestedBatchId &&
+      this.canceledBatches.has(requestedBatchId) &&
+      (url.pathname === '/file' || url.pathname === '/finish') &&
+      req.method === 'POST'
+    ) {
+      res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
+      return;
+    }
     const batch = this.batch;
-    if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
+    if (!batch || batch.shipment !== shipment || requestedBatchId !== batch.id) throw new Error('Upload session expired. Start the upload again.');
     this.touchBatchLock();
     if (req.method === 'POST' && url.pathname === '/file') {
       if (this.canceledBatches.has(batch.id)) {
@@ -520,6 +593,7 @@ export class FreightServer {
         const bytes = await this.body(req, f.size);
         if (f.saved && f.hash === expectedHash) {
           json({ saved: true, duplicate: true });
+          if (!this.canceledBatches.has(batch.id) && !this.batchHasUnfinishedFiles(batch)) this.scheduleFinishGrace(batch);
           return;
         }
         if (clientAborted || req.aborted) {
@@ -566,6 +640,7 @@ export class FreightServer {
           return;
         }
         json({ saved: true });
+        if (!this.canceledBatches.has(batch.id) && !this.batchHasUnfinishedFiles(batch)) this.scheduleFinishGrace(batch);
       } catch (e) {
         if (clientAborted || req.aborted) {
           if (!res.headersSent) res.end();
@@ -582,10 +657,9 @@ export class FreightServer {
         return;
       }
       if (this.writing) throw new Error('Wait for the current picture to save.');
-      for (const f of batch.files) { if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.'); const bytes = await fs.readFile(f.saved); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.'); }
-      shipment.closed = true; shipment.pictures += batch.files.length; shipment.lastUploadSubfolder = batch.uploadFolderLabel;
-      try { await this.persist(); } catch (e) { shipment.closed = false; shipment.pictures -= batch.files.length; throw e; }
-      this.batch = undefined; json({ complete: true, pictures: batch.files.length }); return;
+      const pictures = await this.completeBatch(batch);
+      json({ complete: true, pictures });
+      return;
     }
     throw new Error('Unknown request.');
   }
