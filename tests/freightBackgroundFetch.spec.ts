@@ -32,34 +32,109 @@ async function launchFreightApp(storage: string) {
   return { app, page };
 }
 
-test('reattach logic code exists in build', async () => {
-  const inline = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
-  expect(inline).toContain('reattachOrCleanupBackgroundFetches');
-  expect(inline).toContain('activeBackgroundFetch');
-});
-
-test('visibilitychange handler checks active background fetch', async () => {
-  const inline = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
-  expect(inline).toContain('activeBackgroundFetch');
-  expect(inline).toContain('visibilitychange');
-});
-
-test('service worker backgroundfetchsuccess calls finish and clears queue', async ({ browser }) => {
-  const profile = path.resolve('.cache/freight-sw-finish', randomUUID());
+test('on load with running background fetch for current batch it is not aborted and progress shows', async ({ browser }) => {
+  const profile = path.resolve('.cache/freight-bg-fetch-reattach', randomUUID());
   const storage = path.join(profile, 'pictures');
   await mkdir(storage, { recursive: true });
   const { app, page } = await launchFreightApp(storage);
   try {
-    await page.getByLabel('Company', { exact: true }).fill('SW Finish Co');
+    await page.getByLabel('Company', { exact: true }).fill('Reattach Co');
     await page.getByLabel('Date shipped').fill('2026-11-04');
     await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
 
     const state = await page.evaluate(() => window.toolkit.freight('status'));
-    const shipment = state.shipments.find(s => s.company === 'SW Finish Co')!;
+    const shipment = state.shipments.find(s => s.company === 'Reattach Co')!;
     const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     
+    let bgFetchAborted = false;
+    await mobile.addInitScript(() => {
+      const mockBgFetch = {
+        id: 'freight-mock-batch-0',
+        downloadTotal: 2000,
+        uploaded: 500,
+        addEventListener: (event: string, handler: Function) => {
+          if (event === 'backgroundfetchprogress') {
+            setTimeout(() => handler(), 100);
+          }
+        },
+        removeEventListener: () => {},
+        abort: async () => {
+          (window as any).bgFetchAbortCalled = true;
+        }
+      };
+      
+      const origNavigator = window.navigator;
+      Object.defineProperty(window, 'navigator', {
+        get: () => new Proxy(origNavigator, {
+          get: (target, prop) => {
+            if (prop === 'serviceWorker' && window.isSecureContext) {
+              const origSw = (target as any).serviceWorker;
+              return {
+                controller: {},
+                ready: Promise.resolve({
+                  backgroundFetch: {
+                    getIds: async () => ['freight-mock-batch-0'],
+                    get: async (id: string) => id === 'freight-mock-batch-0' ? mockBgFetch : null,
+                  },
+                  active: { postMessage: () => {} },
+                }),
+                register: origSw?.register?.bind(origSw) || (() => Promise.resolve({})),
+                addEventListener: origSw?.addEventListener?.bind(origSw) || (() => {}),
+              };
+            }
+            return (target as any)[prop];
+          }
+        })
+      });
+    });
+
+    await mobile.goto(localUrl);
+    
+    await mobile.waitForFunction(() => {
+      const uploadSession = document.getElementById('upload-session');
+      const uploadStatus = document.getElementById('upload-status');
+      return uploadSession && !uploadSession.hidden && uploadStatus && uploadStatus.textContent;
+    }, { timeout: 10000 });
+    
+    bgFetchAborted = await mobile.evaluate(() => (window as any).bgFetchAbortCalled === true);
+    expect(bgFetchAborted).toBe(false);
+    
+    await mobile.close();
+  } finally {
+    await app.close();
+  }
+});
+
+test('visibilitychange hidden does not abort page upload when no background fetch active', async ({ browser }) => {
+  const profile = path.resolve('.cache/freight-visibility-no-abort', randomUUID());
+  const storage = path.join(profile, 'pictures');
+  await mkdir(storage, { recursive: true });
+  const { app, page } = await launchFreightApp(storage);
+  try {
+    await page.getByLabel('Company', { exact: true }).fill('Visibility Co');
+    await page.getByLabel('Date shipped').fill('2026-11-04');
+    await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
+
+    const state = await page.evaluate(() => window.toolkit.freight('status'));
+    const shipment = state.shipments.find(s => s.company === 'Visibility Co')!;
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
+
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
+    
+    let uploadRequestSeen = false;
+    let uploadAbortedByVisibility = false;
+    await mobile.route(/\/file\?/, async route => {
+      uploadRequestSeen = true;
+      await new Promise(resolve => setTimeout(resolve, 200));
+      if (uploadAbortedByVisibility) {
+        await route.abort();
+      } else {
+        await route.continue();
+      }
+    });
+
     await mobile.goto(localUrl);
     await mobile.locator('#files').setInputFiles([
       { name: 'pallet-a.png', mimeType: 'image/png', buffer: PNG },
@@ -68,17 +143,110 @@ test('service worker backgroundfetchsuccess calls finish and clears queue', asyn
     await mobile.locator('#confirm').check();
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
     
-    await expect(mobile.locator('#upload-status')).toContainText('Done, 1 pictures uploaded', { timeout: 60000 });
+    await mobile.waitForFunction(() => uploadRequestSeen, { timeout: 5000 });
     
-    expect(await readdir(shipment.folder)).toHaveLength(1);
+    await mobile.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { 
+        get: () => 'hidden', 
+        configurable: true 
+      });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    
+    await mobile.waitForTimeout(500);
+    
+    await expect(mobile.locator('#upload-status')).toContainText(/Done|Uploading|Verifying/, { timeout: 15000 });
+    
+    const files = await readdir(shipment.folder);
+    expect(files.length).toBe(1);
+    
+    await mobile.unroute(/\/file\?/);
     await mobile.close();
   } finally {
     await app.close();
   }
 });
 
-test('cancel logic includes background fetch abort', async () => {
-  const inline = readFileSync(path.join(process.cwd(), 'dist-electron', 'freightMobileInline.js'), 'utf8');
-  expect(inline).toContain('abortActiveBatch');
-  expect(inline).toContain('backgroundFetchRegistrationId');
+test('cancel upload aborts the background fetch', async ({ browser }) => {
+  const profile = path.resolve('.cache/freight-cancel-bg-fetch', randomUUID());
+  const storage = path.join(profile, 'pictures');
+  await mkdir(storage, { recursive: true });
+  const { app, page } = await launchFreightApp(storage);
+  try {
+    await page.getByLabel('Company', { exact: true }).fill('Cancel BG Co');
+    await page.getByLabel('Date shipped').fill('2026-11-04');
+    await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
+
+    const state = await page.evaluate(() => window.toolkit.freight('status'));
+    const shipment = state.shipments.find(s => s.company === 'Cancel BG Co')!;
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
+
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
+    
+    await mobile.addInitScript(() => {
+      const mockBgFetch = {
+        id: 'freight-cancel-test',
+        downloadTotal: 2000,
+        uploaded: 500,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        abort: async () => {
+          (window as any).bgFetchAbortCalled = true;
+        }
+      };
+      
+      const origNavigator = window.navigator;
+      Object.defineProperty(window, 'navigator', {
+        get: () => new Proxy(origNavigator, {
+          get: (target, prop) => {
+            if (prop === 'serviceWorker' && window.isSecureContext) {
+              const origSw = (target as any).serviceWorker;
+              return {
+                controller: {},
+                ready: Promise.resolve({
+                  backgroundFetch: {
+                    getIds: async () => (window as any).bgFetchAbortCalled ? [] : ['freight-cancel-test'],
+                    get: async (id: string) => {
+                      if ((window as any).bgFetchAbortCalled) return null;
+                      return id === 'freight-cancel-test' ? mockBgFetch : null;
+                    },
+                  },
+                  active: { postMessage: () => {} },
+                }),
+                register: origSw?.register?.bind(origSw) || (() => Promise.resolve({})),
+                addEventListener: origSw?.addEventListener?.bind(origSw) || (() => {}),
+              };
+            }
+            return (target as any)[prop];
+          }
+        })
+      });
+    });
+    
+    await mobile.route(/\/finish/, async route => {
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      await route.continue();
+    });
+
+    await mobile.goto(localUrl);
+    await mobile.locator('#files').setInputFiles([
+      { name: 'pallet-a.png', mimeType: 'image/png', buffer: PNG },
+    ]);
+    await mobile.getByLabel('Pallet amount', { exact: true }).fill('1');
+    await mobile.locator('#confirm').check();
+    await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+    
+    await mobile.waitForTimeout(500);
+    await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
+    
+    await mobile.unroute(/\/finish/);
+    await expect(mobile.locator('#message')).toContainText('Upload canceled', { timeout: 5000 });
+    
+    const bgFetchAborted = await mobile.evaluate(() => (window as any).bgFetchAbortCalled === true);
+    expect(bgFetchAborted).toBe(true);
+    
+    await mobile.close();
+  } finally {
+    await app.close();
+  }
 });

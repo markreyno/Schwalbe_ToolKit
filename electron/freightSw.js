@@ -55,6 +55,8 @@ async function drainRemainingUploadsInSw() {
     const fileRec = Q.materializeFile(fresh.files[i]);
     const blob = fileRec?.blob;
     if (!(blob instanceof Blob) || blob.size < 1) return;
+    const preUpload = await Q.getPending();
+    if (!preUpload || preUpload.batchId !== batchId) return;
     const res = await fetch('/file?batch=' + encodeURIComponent(batchId) + '&index=' + i + '&key=' + encodeURIComponent(key), {
       method: 'POST',
       headers: {
@@ -64,6 +66,8 @@ async function drainRemainingUploadsInSw() {
       body: blob
     });
     if (!res.ok) return;
+    const postUpload = await Q.getPending();
+    if (!postUpload || postUpload.batchId !== batchId) return;
     await Q.markIndexUploaded(i);
     broadcastUploadProgress(await Q.getPending());
   }
