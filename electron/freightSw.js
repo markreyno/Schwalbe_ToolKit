@@ -92,5 +92,22 @@ self.addEventListener('backgroundfetchsuccess', event => {
     const key = await markIndicesFromBackgroundFetch(reg);
     if (!key) return;
     await finishIfQueueComplete(batchId, key);
+    await event.updateUI({ title: 'Freight pictures uploaded' });
+  })());
+});
+
+self.addEventListener('backgroundfetchfail', event => {
+  event.waitUntil((async () => {
+    const reg = event.registration;
+    const records = await reg.matchAll();
+    for (const record of records) {
+      const url = new URL(record.request.url);
+      const index = Number(url.searchParams.get('index'));
+      if (Number.isFinite(index) && record.response?.ok) {
+        const Q = self.FreightUploadQueue;
+        await Q.markIndexUploaded(index);
+      }
+    }
+    await event.updateUI({ title: 'Upload paused, open Freight to retry' });
   })());
 });

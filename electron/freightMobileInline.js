@@ -75,6 +75,16 @@ function setUploadError(text) {
   else { node.hidden = true; node.textContent = ''; }
 }
 
+function showBackgroundSyncNote() {
+  const node = el('background-sync-note');
+  if (node) node.hidden = false;
+}
+
+function hideBackgroundSyncNote() {
+  const node = el('background-sync-note');
+  if (node) node.hidden = true;
+}
+
 function setPickChromeVisible(visible) {
   if (el('pick-chrome')) el('pick-chrome').hidden = !visible;
 }
@@ -291,11 +301,24 @@ async function abortActiveBatch() {
   uploadCanceled = true;
   activeXhr?.abort();
   finishAbort?.abort();
+  const Q = uploadQueue();
+  const pending = Q ? await Q.getPending() : null;
+  if (pending && batch?.id) {
+    try {
+      const reg = await ensureUploadServiceWorker();
+      const bf = reg?.backgroundFetch;
+      if (bf?.get) {
+        const id = backgroundFetchRegistrationId(batch.id, pending);
+        const item = await bf.get(id);
+        await item?.abort?.();
+      }
+    } catch { /* ignore */ }
+  }
   const b = batch;
   batch = null;
   if (b) await api('/cancel?batch=' + b.id, { method: 'POST' }).catch(() => { });
   else await api('/cancel-active', { method: 'POST' }).catch(() => { });
-  await uploadQueue()?.clearPending();
+  await Q?.clearPending();
   uploadCanceled = false;
   busy = false;
 }
@@ -457,27 +480,34 @@ async function registerServiceWorkerForUploads() {
   return ensureUploadServiceWorker();
 }
 
-async function cleanupOrphanBackgroundFetches() {
-  if (!window.isSecureContext || !('serviceWorker' in navigator)) return;
+async function reattachOrCleanupBackgroundFetches(pending) {
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) return null;
   try {
     const reg = await ensureUploadServiceWorker();
     const bf = reg?.backgroundFetch;
-    if (!bf?.getIds) return;
+    if (!bf?.getIds) return null;
     const ids = await bf.getIds();
     for (const id of ids) {
       if (String(id).startsWith('freight-')) {
         const item = await bf.get(id);
-        await item?.abort?.();
+        if (!item) continue;
+        const expectedId = pending ? backgroundFetchRegistrationId(pending.batchId, pending) : null;
+        if (expectedId && id === expectedId) {
+          return item;
+        }
+        await item.abort?.();
       }
     }
   } catch { /* ignore */ }
+  return null;
 }
 
 async function prepareUploadQueueOnLoad() {
   const Q = uploadQueue();
-  if (!Q?.repairAndLoadPending) return { pending: null, notice: '' };
-  await cleanupOrphanBackgroundFetches();
-  return Q.repairAndLoadPending();
+  if (!Q?.repairAndLoadPending) return { pending: null, notice: '', backgroundFetch: null };
+  const result = await Q.repairAndLoadPending();
+  const backgroundFetch = result.pending ? await reattachOrCleanupBackgroundFetches(result.pending) : null;
+  return { ...result, backgroundFetch };
 }
 
 async function syncUploadProgressFromQueue() {
@@ -497,14 +527,38 @@ function backgroundFetchRegistrationId(batchId, pending) {
   return 'freight-' + batchId + (remaining.length ? '-' + remaining.join('.') : '');
 }
 
+async function ensureServiceWorkerController() {
+  if (!('serviceWorker' in navigator)) return false;
+  if (navigator.serviceWorker.controller) return true;
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => resolve(false), 5000);
+    const onControllerChange = () => {
+      clearTimeout(timeout);
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      resolve(true);
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+  });
+}
+
 async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) {
   const Q = uploadQueue();
   const remaining = Q.remainingIndices(pending);
-  if (!remaining.length) return false;
+  if (!remaining.length) return { success: false, reason: 'no-remaining-files' };
+  const probe = await probeBackgroundUploadSupport();
   try {
+    if (!probe.controller && !(await ensureServiceWorkerController())) {
+      const error = 'Service worker is not controlling the page';
+      await reportBackgroundFetchDiagnostics({ ...probe, error, channel: 'none' });
+      return { success: false, reason: 'no-controller', error, probe };
+    }
     const reg = await registerServiceWorkerForUploads();
     const bf = reg?.backgroundFetch;
-    if (!bf || typeof bf.fetch !== 'function') return false;
+    if (!bf || typeof bf.fetch !== 'function') {
+      const error = 'Background Fetch API is not available';
+      await reportBackgroundFetchDiagnostics({ ...probe, error, channel: 'none' });
+      return { success: false, reason: 'no-api', error, probe };
+    }
     const requests = remaining.map(i => {
       const fileRec = Q.materializeFile(pending.files[i]);
       return new Request('/file?batch=' + batchId + '&index=' + i + '&key=' + encodeURIComponent(key), {
@@ -522,6 +576,7 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
       title: 'Freight picture upload',
       downloadTotal
     });
+    await reportBackgroundFetchDiagnostics({ ...probe, error: null, channel: 'background-fetch' });
     const resumeLabel = resuming && isResumeUpload(pending);
     setUploadStatus(resumeLabel ? uploadProgressLabel(pending) : uploadProgressLabel(pending));
     const onProgress = () => {
@@ -545,10 +600,19 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
       bg.addEventListener('backgroundfetchfail', onFail);
     });
     for (const i of remaining) await Q.markIndexUploaded(i);
-    return true;
-  } catch {
-    return false;
+    return { success: true };
+  } catch (e) {
+    const error = e.message || 'Unknown error';
+    await reportBackgroundFetchDiagnostics({ ...probe, error, channel: 'none' });
+    return { success: false, reason: 'exception', error, probe };
   }
+}
+
+async function reportBackgroundFetchDiagnostics(data) {
+  if (!batch?.id) return;
+  try {
+    await api('/batch', post({ batchId: batch.id, backgroundFetchDiagnostics: data }));
+  } catch { /* diagnostics reporting is best-effort */ }
 }
 
 async function waitForServiceWorkerQueueDrain(pending, actuallyResuming) {
@@ -566,11 +630,11 @@ async function waitForServiceWorkerQueueDrain(pending, actuallyResuming) {
     if (uploaded > lastUploaded) {
       lastUploaded = uploaded;
       stalledAt = Date.now();
+    } else if (Date.now() - stalledAt > 45000) {
+      break;
     } else if (Date.now() - stalledAt > 12000) {
       notifyServiceWorkerToContinueUploads();
       stalledAt = Date.now();
-    } else if (Date.now() - stalledAt > 45000) {
-      break;
     }
     await new Promise(r => setTimeout(r, 450));
   }
@@ -626,9 +690,13 @@ async function drainUploadQueue(resuming) {
   } catch { /* page upload works without a controlling service worker */ }
   const probe = await probeBackgroundUploadSupport();
   try { sessionStorage.setItem('schwalbe-freight-upload-probe', JSON.stringify(probe)); } catch { /* ignore */ }
+  if (probe.backgroundFetchPermission === 'denied' || probe.backgroundFetchPermission === 'prompt') {
+    showBackgroundSyncNote();
+  }
   if (!batch) await ensureBatchOnServer(pending, 'page');
   pending = await Q.getPending();
-  if (await tryUploadRemainingViaBackgroundFetch(pending, batch.id, actuallyResuming)) {
+  const bgFetchResult = await tryUploadRemainingViaBackgroundFetch(pending, batch.id, actuallyResuming);
+  if (bgFetchResult.success) {
     if (uploadCanceled) return;
     pending = await Q.getPending();
     await finalizeVerifiedUpload(pending);
@@ -663,6 +731,7 @@ async function runUpload(resuming) {
   setPhase('uploading');
   setCaptureDisabled(true);
   setUploadError('');
+  hideBackgroundSyncNote();
   try {
     const Q = uploadQueue();
     if (!Q) throw Error('Upload queue is unavailable. Refresh and try again.');
@@ -709,7 +778,44 @@ async function runUpload(resuming) {
   }
 }
 
-async function resumePendingUploadIfAny(state) {
+async function reattachBackgroundFetchProgress(bg, pending) {
+  if (!bg || !pending) return;
+  setPhase('uploading');
+  setUploadStatus(uploadProgressLabel(pending));
+  const Q = uploadQueue();
+  const remaining = Q.remainingIndices(pending);
+  const onProgress = () => {
+    if (uploadCanceled) return;
+    const remainingBytes = remaining.reduce((n, i) => n + (pending.files[i].size || 0), 0);
+    const bytesTotal = Math.max(1, bg.downloadTotal || remainingBytes);
+    const byteFraction = Math.min(1, (bg.uploaded || 0) / bytesTotal);
+    syncProgressFromPending(pending, Math.round(remainingBytes * byteFraction));
+    setUploadStatus(uploadProgressLabel(pending));
+  };
+  bg.addEventListener('backgroundfetchprogress', onProgress);
+  onProgress();
+  const onSuccess = async () => {
+    cleanup();
+    for (const i of remaining) await Q.markIndexUploaded(i);
+    const fresh = await Q.getPending();
+    await finalizeVerifiedUpload(fresh);
+  };
+  const onFail = () => {
+    cleanup();
+    setPhase('error');
+    setUploadError('Background upload failed. Retry with the screen on.');
+    setUploadStatus(uploadProgressLabel(pending));
+  };
+  const cleanup = () => {
+    bg.removeEventListener('backgroundfetchsuccess', onSuccess);
+    bg.removeEventListener('backgroundfetchfail', onFail);
+    bg.removeEventListener('backgroundfetchprogress', onProgress);
+  };
+  bg.addEventListener('backgroundfetchsuccess', onSuccess);
+  bg.addEventListener('backgroundfetchfail', onFail);
+}
+
+async function resumePendingUploadIfAny(state, backgroundFetch) {
   const Q = uploadQueue();
   if (!Q || busy || !key) return false;
   const pending = await Q.getPending();
@@ -731,6 +837,11 @@ async function resumePendingUploadIfAny(state) {
   }
   el('pallets').value = String(pending.pallets);
   setUploadStatus(uploadProgressLabel(pending));
+  if (backgroundFetch) {
+    busy = true;
+    await reattachBackgroundFetchProgress(backgroundFetch, pending);
+    return true;
+  }
   await runUpload(true);
   return true;
 }
@@ -739,13 +850,14 @@ function tryResumeWhenIdle() {
   if (busy || !key) return;
   const Q = uploadQueue();
   if (!Q) return;
-  void Q.getPending().then(pending => {
+  void Q.getPending().then(async pending => {
     if (!pending || pending.shipmentKey !== key) return;
     if (!Q.shouldAutoResumeUpload(pending)) return;
     const { uploaded, total } = Q.pendingProgress(pending);
     if (uploaded >= total) return;
+    const backgroundFetch = await reattachOrCleanupBackgroundFetches(pending);
     void api('/state')
-      .then(s => resumePendingUploadIfAny(s))
+      .then(s => resumePendingUploadIfAny(s, backgroundFetch))
       .catch(() => { });
   });
 }
@@ -772,11 +884,32 @@ async function reconcileUploadAfterForegroundReturn() {
   } catch { /* ignore */ }
 }
 
+async function isBackgroundFetchRunning(batchId, pending) {
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) return false;
+  try {
+    const reg = await ensureUploadServiceWorker();
+    const bf = reg?.backgroundFetch;
+    if (!bf?.get) return false;
+    const id = backgroundFetchRegistrationId(batchId, pending);
+    const item = await bf.get(id);
+    return !!item;
+  } catch {
+    return false;
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     if (busy && batch) {
-      activeXhr?.abort();
-      notifyServiceWorkerToContinueUploads();
+      void (async () => {
+        const Q = uploadQueue();
+        const pending = Q ? await Q.getPending() : null;
+        const hasBgFetch = pending && batch ? await isBackgroundFetchRunning(batch.id, pending) : false;
+        if (hasBgFetch) {
+          activeXhr?.abort();
+        }
+        notifyServiceWorkerToContinueUploads();
+      })();
     }
     return;
   }
@@ -831,7 +964,7 @@ api('/state').then(async s => {
   } else if (s.shipment.closed) {
     message('This shipment is complete. Select Reupload on the desktop to add pictures.');
   } else {
-    if (await resumePendingUploadIfAny(s)) return;
+    if (await resumePendingUploadIfAny(s, queuePrep.backgroundFetch)) return;
     showUploadView();
     markActiveShipmentSession();
     setShipmentTitle(s.shipment.company, s.shipment.date);
