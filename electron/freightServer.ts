@@ -153,13 +153,20 @@ export class FreightServer {
     const batch = this.batch;
     this.batch = undefined;
     if (!batch) return;
+    if (this.writing && this.writingBatchId === batch.id) {
+      await new Promise(r => setTimeout(r, 100));
+    }
     const prefix = `_${batch.id.slice(0, 8)}_`;
     for (const f of batch.files) {
       if (f.saved) { try { await fs.unlink(f.saved); } catch { /* already removed */ } f.saved = undefined; }
     }
     try {
       for (const name of await fs.readdir(batch.uploadDir)) {
-        if (name.includes(prefix) && name.endsWith('.part')) await fs.unlink(path.join(batch.uploadDir, name));
+        if (name.includes(prefix)) {
+          try {
+            await fs.unlink(path.join(batch.uploadDir, name));
+          } catch { /* already removed */ }
+        }
       }
     } catch { /* folder may be missing */ }
     await this.removeEmptyUploadSubfolder(batch.uploadDir, batch.shipment.folder);
