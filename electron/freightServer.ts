@@ -482,16 +482,20 @@ export class FreightServer {
       json({ id: this.batch.id, uploadFolder: this.batch.uploadFolderLabel, total: this.batch.files.length, completed: 0 });
       return;
     }
-    const batch = this.batch;
-    if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
-    this.touchBatchLock();
     if (req.method === 'POST' && url.pathname === '/cancel') {
-      const batchId = batch.id;
-      this.canceledBatches.add(batchId);
-      await this.abandonBatch();
+      const batchIdParam = url.searchParams.get('batch');
+      if (batchIdParam) {
+        this.canceledBatches.add(batchIdParam);
+      }
+      if (this.batch && this.batch.shipment === shipment && (!batchIdParam || this.batch.id === batchIdParam)) {
+        await this.abandonBatch();
+      }
       json({ canceled: true });
       return;
     }
+    const batch = this.batch;
+    if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
+    this.touchBatchLock();
     if (req.method === 'POST' && url.pathname === '/file') {
       if (this.canceledBatches.has(batch.id)) {
         res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
