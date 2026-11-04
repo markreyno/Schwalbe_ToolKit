@@ -126,6 +126,16 @@ function showUploadView() {
   if (window.isSecureContext && 'serviceWorker' in navigator) void registerServiceWorkerForUploads();
 }
 
+function showDoneForCompletedUpload(pictureCount) {
+  busy = false;
+  batch = null;
+  setCaptureDisabled(false);
+  setUploadError('');
+  setPhase('done');
+  const n = Number(pictureCount) || 0;
+  setUploadStatus('Done, ' + n + ' pictures uploaded');
+}
+
 function showShipmentSetup(prefillCompany, prefillDate) {
   el('new-company').value = prefillCompany || '';
   el('new-date').value = prefillDate || todayLocalIso();
@@ -846,9 +856,14 @@ async function resumePendingUploadIfAny(state, backgroundFetch) {
   if (!pending || pending.shipmentKey !== key) return false;
   if (!Q.shouldAutoResumeUpload(pending)) return false;
   const { total, uploaded } = Q.pendingProgress(pending);
-  if (uploaded >= total && total > 0) {
+  if (state?.shipment?.closed) {
+    showUploadView();
+    markActiveShipmentSession();
+    setShipmentTitle(state.shipment.company, state.shipment.date);
+    setSavingTo(state.shipment.saveTarget);
     await Q.clearPending();
-    return false;
+    showDoneForCompletedUpload(state.shipment.pictures || total);
+    return true;
   }
   showUploadView();
   markActiveShipmentSession();
@@ -861,6 +876,10 @@ async function resumePendingUploadIfAny(state, backgroundFetch) {
   }
   el('pallets').value = String(pending.pallets);
   setUploadStatus(uploadProgressLabel(pending));
+  if (uploaded >= total && total > 0) {
+    await runUpload(true);
+    return true;
+  }
   if (backgroundFetch) {
     busy = true;
     await reattachBackgroundFetchProgress(backgroundFetch, pending);
@@ -899,11 +918,10 @@ async function reconcileUploadAfterForegroundReturn() {
   try {
     const s = await api('/state');
     if (s.shipment?.closed) {
-      batch = null;
-      busy = false;
-      setCaptureDisabled(false);
-      setPhase('done');
-      setUploadStatus('Done, shipment pictures uploaded');
+      const pending = await Q.getPending();
+      const total = pending?.files?.length || s.shipment.pictures;
+      await Q.clearPending();
+      showDoneForCompletedUpload(s.shipment.pictures || total);
     }
   } catch { /* ignore */ }
 }
@@ -969,6 +987,15 @@ api('/state').then(async s => {
     el('open-shipment').onclick = () => { location.href = '/?key=' + encodeURIComponent(el('shipment-select').value); };
     if (!s.shipments.length) { el('shipment-empty').hidden = false; el('shipment-select').disabled = true; }
   } else if (s.shipment.closed) {
+    if (queuePrep.pending && queuePrep.pending.shipmentKey === key) {
+      setShipmentTitle(s.shipment.company, s.shipment.date);
+      setSavingTo(s.shipment.saveTarget);
+      await uploadQueue()?.clearPending();
+      showUploadView();
+      markActiveShipmentSession();
+      showDoneForCompletedUpload(s.shipment.pictures || queuePrep.pending.files?.length);
+      return;
+    }
     message('This shipment is complete. Select Reupload on the desktop to add pictures.');
   } else {
     if (await resumePendingUploadIfAny(s, queuePrep.backgroundFetch)) return;

@@ -9,28 +9,6 @@ self.addEventListener('activate', event => {
   event.waitUntil(self.clients.claim());
 });
 
-async function hasClient() {
-  try {
-    const clients = await self.clients.matchAll({ type: 'window' });
-    return clients.length > 0;
-  } catch {}
-  return false;
-}
-
-async function finishIfQueueComplete(batchId, key) {
-  await new Promise(r => setTimeout(r, 1000));
-  if (await hasClient()) {
-    return;
-  }
-  const Q = self.FreightUploadQueue;
-  const pending = await Q.getPending();
-  if (!pending || pending.shipmentKey !== key) return;
-  const { remaining } = Q.pendingProgress(pending);
-  if (remaining > 0) return;
-  await fetch('/finish?batch=' + encodeURIComponent(batchId) + '&key=' + encodeURIComponent(key), { method: 'POST' });
-  await Q.clearPending();
-}
-
 async function markIndicesFromBackgroundFetch(reg) {
   const Q = self.FreightUploadQueue;
   const records = await reg.matchAll();
@@ -87,7 +65,6 @@ async function drainRemainingUploadsInSw() {
     await Q.markIndexUploaded(i);
     broadcastUploadProgress(await Q.getPending());
   }
-  await finishIfQueueComplete(batchId, key);
   broadcastUploadProgress(await Q.getPending());
 }
 
@@ -105,19 +82,10 @@ self.addEventListener('sync', event => {
 self.addEventListener('backgroundfetchsuccess', event => {
   event.waitUntil((async () => {
     const reg = event.registration;
-    const records = await reg.matchAll();
-    const firstUrl = records[0]?.request?.url;
-    const batchId = firstUrl ? new URL(firstUrl).searchParams.get('batch') : '';
-    if (!batchId) return;
     const key = await markIndicesFromBackgroundFetch(reg);
     if (!key) return;
-    if (await hasClient()) {
-      broadcastUploadProgress(await self.FreightUploadQueue.getPending());
-      await event.updateUI({ title: 'Freight pictures uploaded' });
-    } else {
-      await finishIfQueueComplete(batchId, key);
-      await event.updateUI({ title: 'Freight pictures uploaded' });
-    }
+    broadcastUploadProgress(await self.FreightUploadQueue.getPending());
+    await event.updateUI({ title: 'Freight pictures uploaded' });
   })());
 });
 
