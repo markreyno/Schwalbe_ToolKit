@@ -70,6 +70,7 @@ async function drainRemainingUploadsInSw() {
     if (!postUpload || postUpload.batchId !== batchId) {
       try {
         await fetch('/cancel?batch=' + encodeURIComponent(batchId), { method: 'POST' });
+        await new Promise(r => setTimeout(r, 100));
       } catch {}
       return;
     }
