@@ -65,15 +65,13 @@ async function drainRemainingUploadsInSw() {
       },
       body: blob
     });
-    if (!res.ok) return;
-    const postUpload = await Q.getPending();
-    if (!postUpload || postUpload.batchId !== batchId) {
-      try {
-        await fetch('/cancel?batch=' + encodeURIComponent(batchId), { method: 'POST' });
-        await new Promise(r => setTimeout(r, 100));
-      } catch {}
+    if (res.status === 410) {
+      await Q.clearPending();
       return;
     }
+    if (!res.ok) return;
+    const postUpload = await Q.getPending();
+    if (!postUpload || postUpload.batchId !== batchId) return;
     await Q.markIndexUploaded(i);
     broadcastUploadProgress(await Q.getPending());
   }

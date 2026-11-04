@@ -160,3 +160,64 @@ test('cancel upload aborts the background fetch', async ({ browser }) => {
     await app.close();
   }
 });
+
+test('upload after cancel is rejected with 410 and leaves folder empty', async ({ browser }) => {
+  const profile = path.resolve('.cache/freight-cancel-then-upload', randomUUID());
+  const storage = path.join(profile, 'pictures');
+  await mkdir(storage, { recursive: true });
+  const { app, page } = await launchFreightApp(storage);
+  try {
+    await page.getByLabel('Company', { exact: true }).fill('After Cancel Co');
+    await page.getByLabel('Date shipped').fill('2026-11-04');
+    await page.getByRole('button', { name: 'Create shipment & QR code' }).click();
+
+    const state = await page.evaluate(() => window.toolkit.freight('status'));
+    const shipment = state.shipments.find(s => s.company === 'After Cancel Co')!;
+    const localUrl = shipment.url.replace(/^https?:\/\/[^/]+/, 'https://127.0.0.1:48731');
+
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
+    
+    let cancelCalled = false;
+    await mobile.route(/\/cancel\?batch=/, async route => {
+      cancelCalled = true;
+      await route.continue();
+    });
+    
+    let fileUploadAttempts = 0;
+    let fileRejected = false;
+    await mobile.route(/\/file\?/, async route => {
+      fileUploadAttempts++;
+      if (cancelCalled) {
+        const response = await route.fetch();
+        if (response.status() === 410) {
+          fileRejected = true;
+        }
+        await route.fulfill({ response });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await mobile.goto(localUrl);
+    await mobile.locator('#files').setInputFiles([
+      { name: 'pallet-a.png', mimeType: 'image/png', buffer: PNG },
+    ]);
+    await mobile.getByLabel('Pallet amount', { exact: true }).fill('1');
+    await mobile.locator('#confirm').check();
+    await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
+    
+    await mobile.waitForTimeout(200);
+    await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
+    
+    await expect(mobile.locator('#message')).toContainText('Upload canceled', { timeout: 5000 });
+    
+    const files = await readdir(shipment.folder);
+    expect(files.length).toBe(0);
+    
+    await mobile.unroute(/\/cancel/);
+    await mobile.unroute(/\/file/);
+    await mobile.close();
+  } finally {
+    await app.close();
+  }
+});

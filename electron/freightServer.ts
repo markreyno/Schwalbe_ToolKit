@@ -52,11 +52,13 @@ export class FreightServer {
   private master = token();
   private shipments: Shipment[] = [];
   private batch?: Batch;
+  private canceledBatches = new Set<string>();
   private port = 0;
   private preferredAddress = '';
   private useTailscale = false;
   private error = '';
   private writing = false;
+  private writingBatchId?: string;
   private persistence: Promise<void> = Promise.resolve();
   constructor(private settings: string, private tlsManager: PhoneTlsManager) {}
   async start() {
@@ -476,8 +478,19 @@ export class FreightServer {
     const batch = this.batch;
     if (!batch || batch.shipment !== shipment || url.searchParams.get('batch') !== batch.id) throw new Error('Upload session expired. Start the upload again.');
     this.touchBatchLock();
-    if (req.method === 'POST' && url.pathname === '/cancel') { await this.abandonBatch(); json({ canceled: true }); return; }
+    if (req.method === 'POST' && url.pathname === '/cancel') {
+      const batchId = batch.id;
+      await this.abandonBatch();
+      this.canceledBatches.add(batchId);
+      json({ canceled: true });
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/file') {
+      if (this.canceledBatches.has(batch.id)) {
+        res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
+        return;
+      }
       if (this.writing) throw new Error('Another picture is being saved. Retry.');
       const channelHeader = req.headers['x-freight-upload-channel'];
       if (channelHeader === 'background-fetch' || channelHeader === 'service-worker' || channelHeader === 'page') {
@@ -488,6 +501,8 @@ export class FreightServer {
       const markAborted = () => { clientAborted = true; };
       req.once('aborted', markAborted);
       this.writing = true;
+      this.writingBatchId = batch.id;
+      let savedPath: string | undefined;
       try {
         const expectedHash = f.hash ?? req.headers['x-picture-sha256'];
         if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Picture checksum is required. Retry.');
@@ -504,7 +519,15 @@ export class FreightServer {
         let saveExt: string;
         try { saveExt = validateFreightImage(bytes, f.name); } catch (e) { throw e; }
         f.hash = expectedHash;
-        if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
+        if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; savedPath = target; }
+        if (this.canceledBatches.has(batch.id)) {
+          if (savedPath) {
+            try { await fs.unlink(savedPath); } catch { /* already removed */ }
+          }
+          res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
+          return;
+        }
         json({ saved: true });
       } catch (e) {
         if (clientAborted || req.aborted) {
@@ -512,10 +535,15 @@ export class FreightServer {
           return;
         }
         throw e;
-      } finally { this.writing = false; }
+      } finally { this.writing = false; this.writingBatchId = undefined; }
       return;
     }
     if (req.method === 'POST' && url.pathname === '/finish') {
+      if (this.canceledBatches.has(batch.id)) {
+        res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
+        return;
+      }
       if (this.writing) throw new Error('Wait for the current picture to save.');
       for (const f of batch.files) { if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.'); const bytes = await fs.readFile(f.saved); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.'); }
       shipment.closed = true; shipment.pictures += batch.files.length; shipment.lastUploadSubfolder = batch.uploadFolderLabel;

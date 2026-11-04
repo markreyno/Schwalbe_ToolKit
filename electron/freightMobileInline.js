@@ -282,6 +282,12 @@ function uploadPicture(blob, index, hash, pending) {
       if (uploadCanceled) { reject(Error('__canceled__')); return; }
       try {
         const result = JSON.parse(xhr.responseText);
+        if (xhr.status === 410 && result.canceled) {
+          uploadCanceled = true;
+          void uploadQueue()?.clearPending();
+          reject(Error('__canceled__'));
+          return;
+        }
         if (xhr.status < 200 || xhr.status >= 300) throw Error(result.error || 'Upload failed');
         resolve(result);
       } catch (e) { reject(e); }
@@ -668,7 +674,16 @@ async function uploadRemainingViaPageXHR(pending, actuallyResuming) {
 async function finalizeVerifiedUpload(pending) {
   setUploadStatus('Verifying pictures…');
   finishAbort = new AbortController();
-  await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
+  try {
+    await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
+  } catch (e) {
+    if (e.status === 410 || (e.message && e.message.includes('canceled'))) {
+      uploadCanceled = true;
+      await uploadQueue()?.clearPending();
+      throw Error('__canceled__');
+    }
+    throw e;
+  }
   finishAbort = null;
   batch = null;
   await uploadQueue().clearPending();
