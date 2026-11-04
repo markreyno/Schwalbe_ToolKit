@@ -69,7 +69,7 @@ async function drainRemainingUploadsInSw() {
     const postUpload = await Q.getPending();
     if (!postUpload || postUpload.batchId !== batchId) {
       try {
-        await fetch('/cancel?batch=' + encodeURIComponent(batchId) + '&key=' + encodeURIComponent(key), { method: 'POST' });
+        await fetch('/cancel?batch=' + encodeURIComponent(batchId), { method: 'POST' });
       } catch {}
       return;
     }
