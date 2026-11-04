@@ -9,7 +9,19 @@ self.addEventListener('activate', event => {
   event.waitUntil(self.clients.claim());
 });
 
+async function hasClient() {
+  try {
+    const clients = await self.clients.matchAll({ type: 'window' });
+    return clients.length > 0;
+  } catch {}
+  return false;
+}
+
 async function finishIfQueueComplete(batchId, key) {
+  await new Promise(r => setTimeout(r, 200));
+  if (await hasClient()) {
+    return;
+  }
   const Q = self.FreightUploadQueue;
   const pending = await Q.getPending();
   if (!pending || pending.shipmentKey !== key) return;
@@ -55,6 +67,8 @@ async function drainRemainingUploadsInSw() {
     const fileRec = Q.materializeFile(fresh.files[i]);
     const blob = fileRec?.blob;
     if (!(blob instanceof Blob) || blob.size < 1) return;
+    const preUpload = await Q.getPending();
+    if (!preUpload || preUpload.batchId !== batchId) return;
     const res = await fetch('/file?batch=' + encodeURIComponent(batchId) + '&index=' + i + '&key=' + encodeURIComponent(key), {
       method: 'POST',
       headers: {
@@ -63,7 +77,13 @@ async function drainRemainingUploadsInSw() {
       },
       body: blob
     });
+    if (res.status === 410) {
+      await Q.clearPending();
+      return;
+    }
     if (!res.ok) return;
+    const postUpload = await Q.getPending();
+    if (!postUpload || postUpload.batchId !== batchId) return;
     await Q.markIndexUploaded(i);
     broadcastUploadProgress(await Q.getPending());
   }
@@ -91,6 +111,28 @@ self.addEventListener('backgroundfetchsuccess', event => {
     if (!batchId) return;
     const key = await markIndicesFromBackgroundFetch(reg);
     if (!key) return;
-    await finishIfQueueComplete(batchId, key);
+    if (await hasClient()) {
+      broadcastUploadProgress(await self.FreightUploadQueue.getPending());
+      await event.updateUI({ title: 'Freight pictures uploaded' });
+    } else {
+      await finishIfQueueComplete(batchId, key);
+      await event.updateUI({ title: 'Freight pictures uploaded' });
+    }
+  })());
+});
+
+self.addEventListener('backgroundfetchfail', event => {
+  event.waitUntil((async () => {
+    const reg = event.registration;
+    const records = await reg.matchAll();
+    for (const record of records) {
+      const url = new URL(record.request.url);
+      const index = Number(url.searchParams.get('index'));
+      if (Number.isFinite(index) && record.response?.ok) {
+        const Q = self.FreightUploadQueue;
+        await Q.markIndexUploaded(index);
+      }
+    }
+    await event.updateUI({ title: 'Upload paused, open Freight to retry' });
   })());
 });
