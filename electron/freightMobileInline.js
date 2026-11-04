@@ -547,6 +547,11 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
   if (!remaining.length) return { success: false, reason: 'no-remaining-files' };
   const probe = await probeBackgroundUploadSupport();
   try {
+    if (probe.backgroundFetchPermission !== 'granted') {
+      const error = 'Background Fetch permission not granted';
+      await reportBackgroundFetchDiagnostics({ ...probe, error, channel: 'none' });
+      return { success: false, reason: 'permission-not-granted', error, probe };
+    }
     if (!probe.controller && !(await ensureServiceWorkerController())) {
       const error = 'Service worker is not controlling the page';
       await reportBackgroundFetchDiagnostics({ ...probe, error, channel: 'none' });
