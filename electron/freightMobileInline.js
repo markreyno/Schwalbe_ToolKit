@@ -303,22 +303,22 @@ async function abortActiveBatch() {
   finishAbort?.abort();
   const Q = uploadQueue();
   const pending = Q ? await Q.getPending() : null;
-  if (pending && batch?.id) {
+  const b = batch;
+  batch = null;
+  await Q?.clearPending();
+  if (pending && b?.id) {
     try {
       const reg = await ensureUploadServiceWorker();
       const bf = reg?.backgroundFetch;
       if (bf?.get) {
-        const id = backgroundFetchRegistrationId(batch.id, pending);
+        const id = backgroundFetchRegistrationId(b.id, pending);
         const item = await bf.get(id);
         await item?.abort?.();
       }
     } catch { /* ignore */ }
   }
-  const b = batch;
-  batch = null;
   if (b) await api('/cancel?batch=' + b.id, { method: 'POST' }).catch(() => { });
   else await api('/cancel-active', { method: 'POST' }).catch(() => { });
-  await Q?.clearPending();
   uploadCanceled = false;
   busy = false;
 }
