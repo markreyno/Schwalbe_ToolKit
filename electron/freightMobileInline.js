@@ -319,7 +319,6 @@ async function abortActiveBatch() {
   }
   if (b) await api('/cancel?batch=' + b.id, { method: 'POST' }).catch(() => { });
   else await api('/cancel-active', { method: 'POST' }).catch(() => { });
-  await new Promise(r => setTimeout(r, 50));
   uploadCanceled = false;
   busy = false;
 }

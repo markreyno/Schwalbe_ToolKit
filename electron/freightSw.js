@@ -57,22 +57,14 @@ async function drainRemainingUploadsInSw() {
     if (!(blob instanceof Blob) || blob.size < 1) return;
     const preUpload = await Q.getPending();
     if (!preUpload || preUpload.batchId !== batchId) return;
-    await new Promise(r => setTimeout(r, 10));
-    const doubleCheck = await Q.getPending();
-    if (!doubleCheck || doubleCheck.batchId !== batchId) return;
-    let res;
-    try {
-      res = await fetch('/file?batch=' + encodeURIComponent(batchId) + '&index=' + i + '&key=' + encodeURIComponent(key), {
-        method: 'POST',
-        headers: {
-          'X-Picture-SHA256': fileRec.hash,
-          'X-Freight-Upload-Channel': 'service-worker'
-        },
-        body: blob
-      });
-    } catch {
-      return;
-    }
+    const res = await fetch('/file?batch=' + encodeURIComponent(batchId) + '&index=' + i + '&key=' + encodeURIComponent(key), {
+      method: 'POST',
+      headers: {
+        'X-Picture-SHA256': fileRec.hash,
+        'X-Freight-Upload-Channel': 'service-worker'
+      },
+      body: blob
+    });
     if (!res.ok) return;
     const postUpload = await Q.getPending();
     if (!postUpload || postUpload.batchId !== batchId) return;
