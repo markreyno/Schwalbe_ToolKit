@@ -577,6 +577,7 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
       downloadTotal
     });
     await reportBackgroundFetchDiagnostics({ ...probe, error: null, channel: 'background-fetch' });
+    activeBackgroundFetch = bg;
     const resumeLabel = resuming && isResumeUpload(pending);
     setUploadStatus(resumeLabel ? uploadProgressLabel(pending) : uploadProgressLabel(pending));
     const onProgress = () => {
@@ -595,6 +596,7 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
         bg.removeEventListener('backgroundfetchsuccess', onSuccess);
         bg.removeEventListener('backgroundfetchfail', onFail);
         bg.removeEventListener('backgroundfetchprogress', onProgress);
+        activeBackgroundFetch = null;
       };
       bg.addEventListener('backgroundfetchsuccess', onSuccess);
       bg.addEventListener('backgroundfetchfail', onFail);
@@ -702,7 +704,7 @@ async function drainUploadQueue(resuming) {
     await finalizeVerifiedUpload(pending);
     return;
   }
-  const preferServiceWorkerDrain = probe.backgroundFetchApi || probe.installedPwa;
+  const preferServiceWorkerDrain = probe.installedPwa;
   if (preferServiceWorkerDrain) {
     await reportUploadChannel('service-worker');
     try {
@@ -780,6 +782,7 @@ async function runUpload(resuming) {
 
 async function reattachBackgroundFetchProgress(bg, pending) {
   if (!bg || !pending) return;
+  activeBackgroundFetch = bg;
   setPhase('uploading');
   setUploadStatus(uploadProgressLabel(pending));
   const Q = uploadQueue();
@@ -810,6 +813,7 @@ async function reattachBackgroundFetchProgress(bg, pending) {
     bg.removeEventListener('backgroundfetchsuccess', onSuccess);
     bg.removeEventListener('backgroundfetchfail', onFail);
     bg.removeEventListener('backgroundfetchprogress', onProgress);
+    activeBackgroundFetch = null;
   };
   bg.addEventListener('backgroundfetchsuccess', onSuccess);
   bg.addEventListener('backgroundfetchfail', onFail);
@@ -884,32 +888,15 @@ async function reconcileUploadAfterForegroundReturn() {
   } catch { /* ignore */ }
 }
 
-async function isBackgroundFetchRunning(batchId, pending) {
-  if (!window.isSecureContext || !('serviceWorker' in navigator)) return false;
-  try {
-    const reg = await ensureUploadServiceWorker();
-    const bf = reg?.backgroundFetch;
-    if (!bf?.get) return false;
-    const id = backgroundFetchRegistrationId(batchId, pending);
-    const item = await bf.get(id);
-    return !!item;
-  } catch {
-    return false;
-  }
-}
+let activeBackgroundFetch = null;
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     if (busy && batch) {
-      void (async () => {
-        const Q = uploadQueue();
-        const pending = Q ? await Q.getPending() : null;
-        const hasBgFetch = pending && batch ? await isBackgroundFetchRunning(batch.id, pending) : false;
-        if (hasBgFetch) {
-          activeXhr?.abort();
-        }
-        notifyServiceWorkerToContinueUploads();
-      })();
+      if (activeBackgroundFetch) {
+        activeXhr?.abort();
+      }
+      notifyServiceWorkerToContinueUploads();
     }
     return;
   }
