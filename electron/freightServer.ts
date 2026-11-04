@@ -480,8 +480,14 @@ export class FreightServer {
     this.touchBatchLock();
     if (req.method === 'POST' && url.pathname === '/cancel') {
       const batchId = batch.id;
+      const uploadDir = batch.uploadDir;
+      const shipmentFolder = batch.shipment.folder;
       await this.abandonBatch();
       this.canceledBatches.add(batchId);
+      if (this.writing && this.writingBatchId === batchId) {
+        while (this.writing) await new Promise(r => setTimeout(r, 10));
+      }
+      await this.removeEmptyUploadSubfolder(uploadDir, shipmentFolder);
       json({ canceled: true });
       return;
     }
@@ -524,6 +530,7 @@ export class FreightServer {
           if (savedPath) {
             try { await fs.unlink(savedPath); } catch { /* already removed */ }
           }
+          await this.removeEmptyUploadSubfolder(batch.uploadDir, batch.shipment.folder);
           res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
           return;

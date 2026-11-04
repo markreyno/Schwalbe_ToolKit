@@ -177,25 +177,9 @@ test('upload after cancel is rejected with 410 and leaves folder empty', async (
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true });
     
-    let cancelCalled = false;
-    await mobile.route(/\/cancel\?batch=/, async route => {
-      cancelCalled = true;
-      await route.continue();
-    });
-    
-    let fileUploadAttempts = 0;
-    let fileRejected = false;
     await mobile.route(/\/file\?/, async route => {
-      fileUploadAttempts++;
-      if (cancelCalled) {
-        const response = await route.fetch();
-        if (response.status() === 410) {
-          fileRejected = true;
-        }
-        await route.fulfill({ response });
-      } else {
-        await route.continue();
-      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await route.continue();
     });
 
     await mobile.goto(localUrl);
@@ -206,16 +190,15 @@ test('upload after cancel is rejected with 410 and leaves folder empty', async (
     await mobile.locator('#confirm').check();
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
     
-    await mobile.waitForTimeout(200);
+    await mobile.waitForTimeout(100);
     await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
     
-    await expect(mobile.locator('#message')).toContainText('Upload canceled', { timeout: 5000 });
+    await mobile.unroute(/\/file/);
+    await expect(mobile.locator('#message')).toContainText('Upload canceled', { timeout: 10000 });
     
     const files = await readdir(shipment.folder);
     expect(files.length).toBe(0);
     
-    await mobile.unroute(/\/cancel/);
-    await mobile.unroute(/\/file/);
     await mobile.close();
   } finally {
     await app.close();
