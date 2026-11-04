@@ -18,6 +18,7 @@ async function hasClient() {
 }
 
 async function finishIfQueueComplete(batchId, key) {
+  await new Promise(r => setTimeout(r, 200));
   if (await hasClient()) {
     return;
   }
