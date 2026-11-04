@@ -480,14 +480,8 @@ export class FreightServer {
     this.touchBatchLock();
     if (req.method === 'POST' && url.pathname === '/cancel') {
       const batchId = batch.id;
-      const uploadDir = batch.uploadDir;
-      const shipmentFolder = batch.shipment.folder;
-      await this.abandonBatch();
       this.canceledBatches.add(batchId);
-      if (this.writing && this.writingBatchId === batchId) {
-        while (this.writing) await new Promise(r => setTimeout(r, 10));
-      }
-      await this.removeEmptyUploadSubfolder(uploadDir, shipmentFolder);
+      await this.abandonBatch();
       json({ canceled: true });
       return;
     }
@@ -528,7 +522,32 @@ export class FreightServer {
         if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; savedPath = target; }
         if (this.canceledBatches.has(batch.id)) {
           if (savedPath) {
-            try { await fs.unlink(savedPath); } catch { /* already removed */ }
+            try {
+              await fs.unlink(savedPath);
+            } catch (e) {
+              console.error('Failed to delete canceled file:', savedPath, e);
+            }
+          }
+          if (f.saved && f.saved !== savedPath) {
+            try {
+              await fs.unlink(f.saved);
+            } catch (e) {
+              console.error('Failed to delete canceled file f.saved:', f.saved, e);
+            }
+          }
+          try {
+            const prefix = `_${batch.id.slice(0, 8)}_`;
+            for (const name of await fs.readdir(batch.uploadDir)) {
+              if (name.includes(prefix)) {
+                try {
+                  await fs.unlink(path.join(batch.uploadDir, name));
+                } catch (e) {
+                  console.error('Failed to delete file:', name, e);
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Failed to read upload dir:', batch.uploadDir, e);
           }
           await this.removeEmptyUploadSubfolder(batch.uploadDir, batch.shipment.folder);
           res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
