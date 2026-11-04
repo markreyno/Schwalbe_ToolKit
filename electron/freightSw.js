@@ -67,7 +67,12 @@ async function drainRemainingUploadsInSw() {
     });
     if (!res.ok) return;
     const postUpload = await Q.getPending();
-    if (!postUpload || postUpload.batchId !== batchId) return;
+    if (!postUpload || postUpload.batchId !== batchId) {
+      try {
+        await fetch('/cancel?batch=' + encodeURIComponent(batchId) + '&key=' + encodeURIComponent(key), { method: 'POST' });
+      } catch {}
+      return;
+    }
     await Q.markIndexUploaded(i);
     broadcastUploadProgress(await Q.getPending());
   }
