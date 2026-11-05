@@ -1,4 +1,5 @@
 let pendingBatchRequest = null;
+let desktopSavedIndices = new Set();
 const key = new URLSearchParams(location.search).get('key');
 const ACTIVE_SESSION_KEY = 'schwalbe-freight-phone-active';
 const el = id => document.getElementById(id);
@@ -48,7 +49,7 @@ function uploadProgressLabel(pending) {
   if (!Q || !pending) return '';
   const { total, uploaded } = Q.pendingProgress(pending);
   const next = Math.min(uploaded + 1, total);
-  return 'Uploading picture ' + next + ' of ' + total;
+  return uploaded >= total ? 'Verifying ' + total + ' saved pictures…' : 'Uploading picture ' + next + ' of ' + total + ' · ' + uploaded + ' saved on desktop';
 }
 
 function formatDisplayDate(iso) {
@@ -159,9 +160,11 @@ function clearActiveShipmentSession() {
 
 async function api(route, options = {}) {
   const keyQuery = key ? (route.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key) : '';
-  const r = await fetch(route + keyQuery, options);
+  const timeout = AbortSignal.timeout(30000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const r = await fetch(route + keyQuery, { ...options, signal });
   const d = await r.json();
-  if (!r.ok) throw Error(d.error || 'Upload failed');
+  if (!r.ok) { const error = Error(d.error || 'Upload failed'); error.status = r.status; throw error; }
   return d;
 }
 const post = data => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
@@ -267,19 +270,28 @@ function setUploadProgress(completedUnits, total) {
 function uploadPicture(blob, index, hash, pending) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest(); activeXhr = xhr;
+    let lastProgressAt = Date.now(), desktopConfirmed = false, stalled = false;
+    const watchdog = setInterval(() => {
+      if (uploadCanceled) return;
+      desktopConfirmed = desktopSavedIndices.has(index);
+      stalled = Date.now() - lastProgressAt > 20000;
+      if (desktopConfirmed || stalled) xhr.abort();
+    }, 1000);
+    const cleanup = () => { clearInterval(watchdog); if (activeXhr === xhr) activeXhr = null; };
     xhr.open('POST', '/file?batch=' + batch.id + '&index=' + index + '&key=' + encodeURIComponent(key));
     xhr.setRequestHeader('X-Picture-SHA256', hash);
     xhr.setRequestHeader('X-Freight-Upload-Channel', 'page');
     xhr.timeout = 180000;
     xhr.upload.onprogress = e => {
       if (uploadCanceled) return;
+      lastProgressAt = Date.now();
       if (e.lengthComputable && e.total > 0) {
         syncProgressFromPending(pending, e.loaded);
         setUploadStatus(uploadProgressLabel(pending));
       }
     };
     xhr.onload = () => {
-      if (activeXhr === xhr) activeXhr = null;
+      cleanup();
       if (uploadCanceled) { reject(Error('__canceled__')); return; }
       try {
         const result = JSON.parse(xhr.responseText);
@@ -293,9 +305,15 @@ function uploadPicture(blob, index, hash, pending) {
         resolve(result);
       } catch (e) { reject(e); }
     };
-    xhr.onabort = () => { if (activeXhr === xhr) activeXhr = null; reject(Error('__canceled__')); };
-    xhr.onerror = () => { if (activeXhr === xhr) activeXhr = null; reject(uploadCanceled ? Error('__canceled__') : Error('Connection interrupted. Check Wi-Fi and keep the toolkit open.')); };
-    xhr.ontimeout = () => { if (activeXhr === xhr) activeXhr = null; reject(Error('Upload timed out. Retry the upload.')); };
+    xhr.onabort = () => {
+      cleanup();
+      if (desktopConfirmed && !uploadCanceled) { resolve({ saved: true }); return; }
+      const error = Error(stalled ? 'Upload stalled. Reconnecting…' : '__canceled__');
+      error.retryable = stalled;
+      reject(error);
+    };
+    xhr.onerror = () => { cleanup(); reject(uploadCanceled ? Error('__canceled__') : Error('Connection interrupted. Check Wi-Fi and keep the toolkit open.')); };
+    xhr.ontimeout = () => { cleanup(); reject(Error('Upload timed out. Retry the upload.')); };
     xhr.send(blob);
   });
 }
@@ -535,16 +553,64 @@ async function prepareUploadQueueOnLoad() {
   return { ...result, backgroundFetch };
 }
 
+function showCompletedUpload(shipment, total) {
+  showUploadView();
+  if (shipment) { setShipmentTitle(shipment.company, shipment.date); setSavingTo(shipment.saveTarget); }
+  batch = null;
+  setUploadError('');
+  setPhase('done');
+  setUploadProgressBytes(1, 1);
+  setUploadStatus('Done, ' + (total || shipment?.pictures || 0) + ' pictures uploaded');
+}
+
+async function reconcilePendingWithDesktop(pending, state) {
+  if (uploadCanceled || (pending && pending.shipmentKey !== key)) return pending;
+  const s = state || await api('/state');
+  if (uploadCanceled) return null;
+  if (s.shipment?.closed) {
+    await uploadQueue().clearPending();
+    showCompletedUpload(s.shipment, pending?.files?.length || activeProgressPending?.files?.length);
+    return null;
+  }
+  if (!pending) return null;
+  const saved = s.shipment?.uploadBatch;
+  if (saved && saved.id === pending.batchId) {
+    batch = { id: saved.id };
+    desktopSavedIndices = new Set(saved.savedIndices);
+    await uploadQueue().mergeUploadedIndices(saved.savedIndices, saved.id);
+    pending = await uploadQueue().getPending();
+  }
+  return pending;
+}
+
 async function syncUploadProgressFromQueue() {
+  if (uploadCanceled || uiPhase === 'done') return;
   const Q = uploadQueue();
   if (!Q) return;
-  const pending = await Q.getPending();
-  if (!pending || pending.shipmentKey !== key) return;
+  let pending = await Q.getPending();
+  if (pending && pending.shipmentKey !== key) return;
+  pending = await reconcilePendingWithDesktop(pending);
+  if (!pending || uploadCanceled) return;
   syncProgressFromPending(pending, 0);
-  const { total, uploaded } = Q.pendingProgress(pending);
-  if (uploaded > 0 && uploaded < total && isResumeUpload(pending)) {
+  setUploadStatus(uploadProgressLabel(pending));
+}
+
+// Background Fetch completion is delivered to the service worker, not reliably to
+// a page registration. Poll desktop acknowledgments so missing events cannot hang UI.
+async function waitForBackgroundUpload(bg, pending) {
+  let changedAt = Date.now(), previous = -1;
+  while (!uploadCanceled) {
+    pending = await reconcilePendingWithDesktop(await uploadQueue().getPending());
+    if (!pending) { if (uiPhase === 'done' || uploadCanceled) return true; throw Error('Upload queue unavailable. Retry to check desktop completion.'); }
+    const { uploaded, remaining } = uploadQueue().pendingProgress(pending);
+    syncProgressFromPending(pending, 0);
     setUploadStatus(uploadProgressLabel(pending));
+    if (!remaining) return true;
+    if (uploaded !== previous) { previous = uploaded; changedAt = Date.now(); }
+    if (Date.now() - changedAt > 15000) { await bg.abort?.(); return false; }
+    await new Promise(r => setTimeout(r, 1000));
   }
+  return false;
 }
 
 function backgroundFetchRegistrationId(batchId, pending) {
@@ -619,20 +685,10 @@ async function tryUploadRemainingViaBackgroundFetch(pending, batchId, resuming) 
     };
     bg.addEventListener('backgroundfetchprogress', onProgress);
     onProgress();
-    await new Promise((resolve, reject) => {
-      const onSuccess = () => { cleanup(); resolve(); };
-      const onFail = () => { cleanup(); reject(new Error('Background upload failed. Retry with the screen on.')); };
-      const cleanup = () => {
-        bg.removeEventListener('backgroundfetchsuccess', onSuccess);
-        bg.removeEventListener('backgroundfetchfail', onFail);
-        bg.removeEventListener('backgroundfetchprogress', onProgress);
-        activeBackgroundFetch = null;
-      };
-      bg.addEventListener('backgroundfetchsuccess', onSuccess);
-      bg.addEventListener('backgroundfetchfail', onFail);
-    });
-    for (const i of remaining) await Q.markIndexUploaded(i);
-    return { success: true };
+    let completed;
+    try { completed = await waitForBackgroundUpload(bg, pending); }
+    finally { bg.removeEventListener('backgroundfetchprogress', onProgress); activeBackgroundFetch = null; }
+    return { success: completed, reason: completed ? 'saved' : 'stalled' };
   } catch (e) {
     const error = e.message || 'Unknown error';
     await reportBackgroundFetchDiagnostics({ ...probe, error, channel: 'none' });
@@ -649,11 +705,12 @@ async function reportBackgroundFetchDiagnostics(data) {
 
 async function waitForServiceWorkerQueueDrain(pending, actuallyResuming) {
   const Q = uploadQueue();
-  let stalledAt = Date.now();
+  let stalledAt = Date.now(), lastNudgeAt = 0;
   let lastUploaded = Q.pendingProgress(pending).uploaded;
   notifyServiceWorkerToContinueUploads();
   while (!uploadCanceled) {
-    pending = await Q.getPending();
+    pending = await reconcilePendingWithDesktop(await Q.getPending());
+    if (!pending && uiPhase === 'done') return null;
     if (!pending || pending.shipmentKey !== key) throw Error('Upload queue was cleared.');
     syncProgressFromPending(pending, 0);
     const { uploaded, remaining } = Q.pendingProgress(pending);
@@ -662,13 +719,13 @@ async function waitForServiceWorkerQueueDrain(pending, actuallyResuming) {
     if (uploaded > lastUploaded) {
       lastUploaded = uploaded;
       stalledAt = Date.now();
-    } else if (Date.now() - stalledAt > 45000) {
+    } else if (Date.now() - stalledAt > 15000) {
       break;
-    } else if (Date.now() - stalledAt > 12000) {
+    } else if (Date.now() - lastNudgeAt > 5000) {
       notifyServiceWorkerToContinueUploads();
-      stalledAt = Date.now();
+      lastNudgeAt = Date.now();
     }
-    await new Promise(r => setTimeout(r, 450));
+    await new Promise(r => setTimeout(r, 1000));
   }
   return Q.getPending();
 }
@@ -677,20 +734,32 @@ async function uploadRemainingViaPageXHR(pending, actuallyResuming) {
   const Q = uploadQueue();
   await reportUploadChannel('page');
   for (let i = 0; i < pending.files.length; i++) {
-    if (uploadCanceled) break;
+    if (uploadCanceled || uiPhase === 'done') return;
     pending = await Q.getPending();
+    if (!pending) return;
     if (pending.uploadedIndices.includes(i)) continue;
     const fileRec = Q.materializeFile(pending.files[i]);
     setUploadStatus(uploadProgressLabel(pending));
-    await uploadPicture(fileRec.blob, i, fileRec.hash, pending);
+    for (let attempt = 0; ; attempt++) {
+      try { await uploadPicture(fileRec.blob, i, fileRec.hash, pending); break; }
+      catch (e) {
+        if (!e.retryable || uploadCanceled || attempt >= 2) throw e;
+        pending = await reconcilePendingWithDesktop(await Q.getPending());
+        if (!pending || uploadCanceled) return;
+        if (pending.uploadedIndices.includes(i)) break;
+      }
+    }
     if (uploadCanceled) break;
-    await Q.markIndexUploaded(i);
+    await Q.markIndexUploaded(i, pending.batchId);
     pending = await Q.getPending();
     syncProgressFromPending(pending, 0);
   }
 }
 
 async function finalizeVerifiedUpload(pending) {
+  if (uploadCanceled || uiPhase === 'done') return;
+  pending = await reconcilePendingWithDesktop(pending);
+  if (!pending || uploadCanceled) return;
   setUploadStatus('Verifying pictures…');
   finishAbort = new AbortController();
   try {
@@ -735,12 +804,14 @@ async function drainUploadQueue(resuming) {
     showBackgroundSyncNote();
   }
   if (uploadCanceled) return;
+  pending = await reconcilePendingWithDesktop(pending);
+  if (!pending || uploadCanceled) return;
   if (!batch) await ensureBatchOnServer(pending, 'page');
   if (uploadCanceled) return;
   pending = await Q.getPending();
   const bgFetchResult = await tryUploadRemainingViaBackgroundFetch(pending, batch.id, actuallyResuming);
   if (bgFetchResult.success) {
-    if (uploadCanceled) return;
+    if (uploadCanceled || uiPhase === 'done') return;
     pending = await Q.getPending();
     await finalizeVerifiedUpload(pending);
     return;
@@ -754,7 +825,7 @@ async function drainUploadQueue(resuming) {
     } catch { /* Background Sync is optional */ }
     notifyServiceWorkerToContinueUploads();
     pending = await waitForServiceWorkerQueueDrain(pending, actuallyResuming);
-    if (uploadCanceled) return;
+    if (uploadCanceled || uiPhase === 'done') return;
   }
   if (Q.pendingProgress(pending).remaining > 0) {
     if (!preferServiceWorkerDrain) await reportUploadChannel('page');
@@ -769,6 +840,7 @@ async function drainUploadQueue(resuming) {
 
 async function runUpload(resuming) {
   uploadCanceled = false;
+  desktopSavedIndices = new Set();
   busy = true;
   valid();
   setPhase('uploading');
@@ -801,7 +873,7 @@ async function runUpload(resuming) {
     if (uploadCanceled) { await Q.clearPending(); return; }
     await drainUploadQueue(!!resuming);
   } catch (e) {
-    if (uploadCanceled) return; // The cancel handler owns cleanup confirmation and UI.
+    if (uploadCanceled || uiPhase === 'done') return; // The cancel handler owns cleanup confirmation and UI.
     if (e.name === 'AbortError' || e.message === '__canceled__') {
       setPhase('pick');
       resetSendButton();
@@ -824,42 +896,17 @@ async function runUpload(resuming) {
 }
 
 async function reattachBackgroundFetchProgress(bg, pending) {
-  if (!bg || !pending) return;
   activeBackgroundFetch = bg;
+  busy = true;
   setPhase('uploading');
-  setUploadStatus(uploadProgressLabel(pending));
-  const Q = uploadQueue();
-  const remaining = Q.remainingIndices(pending);
-  const onProgress = () => {
-    if (uploadCanceled) return;
-    const remainingBytes = remaining.reduce((n, i) => n + (pending.files[i].size || 0), 0);
-    const bytesTotal = Math.max(1, bg.downloadTotal || remainingBytes);
-    const byteFraction = Math.min(1, (bg.uploaded || 0) / bytesTotal);
-    syncProgressFromPending(pending, Math.round(remainingBytes * byteFraction));
-    setUploadStatus(uploadProgressLabel(pending));
-  };
-  bg.addEventListener('backgroundfetchprogress', onProgress);
-  onProgress();
-  const onSuccess = async () => {
-    cleanup();
-    for (const i of remaining) await Q.markIndexUploaded(i);
-    const fresh = await Q.getPending();
-    await finalizeVerifiedUpload(fresh);
-  };
-  const onFail = () => {
-    cleanup();
-    setPhase('error');
-    setUploadError('Background upload failed. Retry with the screen on.');
-    setUploadStatus(uploadProgressLabel(pending));
-  };
-  const cleanup = () => {
-    bg.removeEventListener('backgroundfetchsuccess', onSuccess);
-    bg.removeEventListener('backgroundfetchfail', onFail);
-    bg.removeEventListener('backgroundfetchprogress', onProgress);
-    activeBackgroundFetch = null;
-  };
-  bg.addEventListener('backgroundfetchsuccess', onSuccess);
-  bg.addEventListener('backgroundfetchfail', onFail);
+  try {
+    await waitForBackgroundUpload(bg, pending);
+    if (uploadCanceled || uiPhase === 'done') return;
+    pending = await uploadQueue().getPending();
+    if (uploadQueue().pendingProgress(pending).remaining) await uploadRemainingViaPageXHR(pending, true);
+    await finalizeVerifiedUpload(await uploadQueue().getPending());
+  } catch (e) { if (!uploadCanceled) { setPhase('error'); setUploadError(e.message); } }
+  finally { activeBackgroundFetch = null; busy = false; }
 }
 
 async function resumePendingUploadIfAny(state, backgroundFetch) {
@@ -869,10 +916,7 @@ async function resumePendingUploadIfAny(state, backgroundFetch) {
   if (!pending || pending.shipmentKey !== key) return false;
   if (!Q.shouldAutoResumeUpload(pending)) return false;
   const { total, uploaded } = Q.pendingProgress(pending);
-  if (uploaded >= total && total > 0) {
-    await Q.clearPending();
-    return false;
-  }
+  // A full queue still needs /finish verification, including after a refresh.
   showUploadView();
   markActiveShipmentSession();
   if (state?.shipment) {
@@ -901,7 +945,7 @@ function tryResumeWhenIdle() {
     if (!pending || pending.shipmentKey !== key) return;
     if (!Q.shouldAutoResumeUpload(pending)) return;
     const { uploaded, total } = Q.pendingProgress(pending);
-    if (uploaded >= total) return;
+
     const backgroundFetch = await reattachOrCleanupBackgroundFetches(pending);
     void api('/state')
       .then(s => resumePendingUploadIfAny(s, backgroundFetch))
@@ -992,7 +1036,8 @@ api('/state').then(async s => {
     el('open-shipment').onclick = () => { location.href = '/?key=' + encodeURIComponent(el('shipment-select').value); };
     if (!s.shipments.length) { el('shipment-empty').hidden = false; el('shipment-select').disabled = true; }
   } else if (s.shipment.closed) {
-    message('This shipment is complete. Select Reupload on the desktop to add pictures.');
+    if (queuePrep.pending?.shipmentKey === key) await uploadQueue().clearPending();
+    showCompletedUpload(s.shipment);
   } else {
     if (await resumePendingUploadIfAny(s, queuePrep.backgroundFetch)) return;
     showUploadView();
@@ -1006,3 +1051,11 @@ api('/state').then(async s => {
     setInterval(() => { void refreshSaveTarget(); }, 5000);
   }
 }).catch(e => message(e.message));
+
+let progressPollBusy = false;
+setInterval(async () => {
+  if (!busy || uploadCanceled || document.visibilityState === 'hidden' || progressPollBusy) return;
+  progressPollBusy = true;
+  try { await syncUploadProgressFromQueue(); } catch { /* retry next poll */ }
+  finally { progressPollBusy = false; }
+}, 2000);

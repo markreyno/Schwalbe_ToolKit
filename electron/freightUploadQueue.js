@@ -49,6 +49,8 @@
           resolve(record);
         };
         req.onerror = () => reject(req.error);
+        tx.oncomplete = () => db.close();
+        tx.onabort = () => { db.close(); reject(tx.error); };
       });
     } catch {
       return null;
@@ -74,8 +76,8 @@
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).put({ ...record, files, id: 'active' });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
     });
   }
 
@@ -85,8 +87,8 @@
       await new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
         tx.objectStore(STORE).delete('active');
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
       });
     } catch { /* ignore */ }
   }
@@ -132,18 +134,41 @@
     return { ...record, files: (record.files || []).map(materializeFile) };
   }
 
-  async function markIndexUploaded(index) {
-    const pending = await getPending();
-    if (!pending) return;
-    if (!pending.uploadedIndices.includes(index)) pending.uploadedIndices.push(index);
-    await savePending(pending);
+  // Serialize metadata updates inside one transaction. Keep image bytes unchanged.
+  async function updateMetadata(update, expectedBatchId) {
+    const db = await openDb();
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        const store = tx.objectStore(STORE);
+        const req = store.get('active');
+        req.onsuccess = () => {
+          const record = req.result;
+          if (!record || (expectedBatchId && record.batchId !== expectedBatchId)) return;
+          if (update(record) !== false) store.put(record);
+        };
+        tx.oncomplete = resolve;
+        tx.onabort = () => reject(tx.error || Error('Upload queue update failed'));
+        tx.onerror = () => { db.close(); reject(tx.error); };
+      });
+    } finally { db.close(); }
+  }
+
+  async function markIndexUploaded(index, expectedBatchId) {
+    await mergeUploadedIndices([index], expectedBatchId);
+  }
+
+  async function mergeUploadedIndices(indices, expectedBatchId) {
+    await updateMetadata(record => {
+      const next = [...new Set([...(record.uploadedIndices || []), ...indices])]
+        .filter(i => Number.isInteger(i) && i >= 0 && i < record.files.length).sort((a, b) => a - b);
+      if (JSON.stringify(next) === JSON.stringify(record.uploadedIndices)) return false;
+      record.uploadedIndices = next;
+    }, expectedBatchId);
   }
 
   async function setBatchId(batchId) {
-    const pending = await getPending();
-    if (!pending) return;
-    pending.batchId = batchId;
-    await savePending(pending);
+    await updateMetadata(record => { record.batchId = batchId; });
   }
 
   function pendingProgress(pending) {
@@ -210,11 +235,7 @@
       record.uploadedIndices = record.uploadedIndices.filter(i => i < usable.length);
       await savePending(record);
     }
-    const { remaining } = pendingProgress(record);
-    if (remaining <= 0) {
-      await clearPending();
-      return { pending: null, notice: '' };
-    }
+    // All bytes sent still needs desktop verification; retain the batch to finish on refresh.
     if (!shouldAutoResumeUpload(record)) {
       await clearPending();
       return { pending: null, notice: 'Cleared an unfinished upload draft.' };
@@ -228,6 +249,7 @@
     clearPending,
     createFromSelection,
     markIndexUploaded,
+    mergeUploadedIndices,
     setBatchId,
     pendingProgress,
     remainingIndices,

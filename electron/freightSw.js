@@ -27,8 +27,8 @@ async function finishIfQueueComplete(batchId, key) {
   if (!pending || pending.shipmentKey !== key) return;
   const { remaining } = Q.pendingProgress(pending);
   if (remaining > 0) return;
-  await fetch('/finish?batch=' + encodeURIComponent(batchId) + '&key=' + encodeURIComponent(key), { method: 'POST' });
-  await Q.clearPending();
+  const response = await fetch('/finish?batch=' + encodeURIComponent(batchId) + '&key=' + encodeURIComponent(key), { method: 'POST' });
+  if (response.ok) await Q.clearPending();
 }
 
 async function markIndicesFromBackgroundFetch(reg) {
@@ -54,7 +54,12 @@ function broadcastUploadProgress(pending) {
   }).catch(() => {});
 }
 
-async function drainRemainingUploadsInSw() {
+let drainTask = null;
+function drainRemainingUploadsInSw() {
+  if (!drainTask) drainTask = performQueueDrain().finally(() => { drainTask = null; });
+  return drainTask;
+}
+async function performQueueDrain() {
   const Q = self.FreightUploadQueue;
   const pending = await Q.getPending();
   if (!pending?.files?.length || !pending.batchId) return;
@@ -84,7 +89,7 @@ async function drainRemainingUploadsInSw() {
     if (!res.ok) return;
     const postUpload = await Q.getPending();
     if (!postUpload || postUpload.batchId !== batchId) return;
-    await Q.markIndexUploaded(i);
+    await Q.markIndexUploaded(i, batchId);
     broadcastUploadProgress(await Q.getPending());
   }
   await finishIfQueueComplete(batchId, key);

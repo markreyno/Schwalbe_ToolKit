@@ -419,6 +419,10 @@ export class FreightServer {
           defaultUploadFolder: path.basename(shipment.folder),
           lastUploadSubfolder: shipment.lastUploadSubfolder,
           saveTarget: this.saveTargetLabel(shipment),
+          uploadBatch: this.batch?.shipment === shipment ? {
+            id: this.batch.id, total: this.batch.files.length,
+            savedIndices: this.batch.files.flatMap((f, i) => f.saved ? [i] : [])
+          } : null,
           phoneUpload: this.phoneUploadProgress(shipment)
         },
         shipments: master ? this.shipments.filter(s => !s.closed).map(s => ({ company: s.company, date: s.date, key: s.token })) : []
@@ -449,6 +453,7 @@ export class FreightServer {
       json({ canceled: true });
       return;
     }
+    if (shipment.closed && req.method === 'POST' && url.pathname === '/finish' && this.completedBatches.get(shipment.id)?.id === url.searchParams.get('batch')) { json({ complete: true }); return; }
     if (shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
     if (req.method === 'POST' && url.pathname === '/batch') {
       const data = JSON.parse((await this.body(req, 100000)).toString());
