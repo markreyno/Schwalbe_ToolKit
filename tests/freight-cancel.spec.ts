@@ -60,6 +60,16 @@ test('cancel upload removes partial files and releases the batch lock immediatel
 
     await mobile.getByRole('button', { name: 'Upload All', exact: true }).click();
     await expect(mobile.getByRole('button', { name: 'Cancel upload', exact: true })).toBeVisible();
+    let rejectCancel = true;
+    await mobile.route(/\/cancel\?/, async route => {
+      if (rejectCancel) await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Desktop cleanup failed' }) });
+      else await route.continue();
+    });
+    await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
+    await expect(mobile.locator('#message')).toContainText('Cancel upload failed');
+    await expect(mobile.locator('#upload-error')).toContainText('Desktop cleanup could not be confirmed');
+    await expect(mobile.locator('#capture-block')).toBeHidden();
+    rejectCancel = false;
     await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
     releaseFirstFile?.();
     await expect(mobile.locator('#message')).toContainText('Upload canceled');

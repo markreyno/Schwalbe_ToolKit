@@ -11,7 +11,7 @@ self.addEventListener('activate', event => {
 
 async function hasClient() {
   try {
-    const clients = await self.clients.matchAll({ type: 'window' });
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     return clients.length > 0;
   } catch {}
   return false;

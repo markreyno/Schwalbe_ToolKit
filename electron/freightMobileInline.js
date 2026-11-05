@@ -1,3 +1,4 @@
+let pendingBatchRequest = null;
 const key = new URLSearchParams(location.search).get('key');
 const ACTIVE_SESSION_KEY = 'schwalbe-freight-phone-active';
 const el = id => document.getElementById(id);
@@ -309,8 +310,9 @@ async function abortActiveBatch() {
   finishAbort?.abort();
   const Q = uploadQueue();
   const pending = Q ? await Q.getPending() : null;
+  // A batch request may already have reached the desktop. Wait for its ID before canceling.
+  await pendingBatchRequest?.catch(() => {});
   const b = batch;
-  batch = null;
   await Q?.clearPending();
   if (pending && b?.id) {
     try {
@@ -323,9 +325,14 @@ async function abortActiveBatch() {
       }
     } catch { /* ignore */ }
   }
-  if (b) await api('/cancel?batch=' + b.id, { method: 'POST' }).catch(() => { });
-  else await api('/cancel-active', { method: 'POST' }).catch(() => { });
-  uploadCanceled = false;
+  try {
+    if (b) await api('/cancel?batch=' + encodeURIComponent(b.id), { method: 'POST' });
+    else await api('/cancel-active', { method: 'POST' });
+  } catch (e) {
+    busy = false;
+    throw e;
+  }
+  batch = null;
   busy = false;
 }
 
@@ -350,8 +357,17 @@ async function returnToPickFromUpload() {
 }
 
 async function resetAfterCancel() {
-  await returnToPickFromUpload();
-  message('Upload canceled');
+  try {
+    await returnToPickFromUpload();
+    message('Upload canceled');
+    return true;
+  } catch (e) {
+    setPhase('error');
+    setUploadError('Desktop cleanup could not be confirmed. Check the connection and tap Cancel upload again. ' + e.message);
+    if (el('upload-retry')) el('upload-retry').hidden = true;
+    message('Cancel upload failed. Desktop files may remain.');
+    return false;
+  }
 }
 
 el('upload-cancel-link').onclick = () => { void resetAfterCancel(); };
@@ -384,7 +400,10 @@ async function ensureBatchOnServer(pending, uploadChannel) {
     batchId: pending.batchId || undefined,
     uploadChannel: uploadChannel || activeUploadChannel || 'page'
   };
-  const created = await api('/batch', post(body));
+  if (uploadCanceled) throw Error('__canceled__');
+  pendingBatchRequest = api('/batch', post(body));
+  let created;
+  try { created = await pendingBatchRequest; } finally { pendingBatchRequest = null; }
   batch = created;
   if (created.id && created.id !== pending.batchId) await uploadQueue().setBatchId(created.id);
   if (created.uploadFolder) setSavingTo(created.uploadFolder);
@@ -715,7 +734,9 @@ async function drainUploadQueue(resuming) {
   if (probe.backgroundFetchPermission === 'denied' || probe.backgroundFetchPermission === 'prompt') {
     showBackgroundSyncNote();
   }
+  if (uploadCanceled) return;
   if (!batch) await ensureBatchOnServer(pending, 'page');
+  if (uploadCanceled) return;
   pending = await Q.getPending();
   const bgFetchResult = await tryUploadRemainingViaBackgroundFetch(pending, batch.id, actuallyResuming);
   if (bgFetchResult.success) {
@@ -777,9 +798,11 @@ async function runUpload(resuming) {
       syncProgressFromPending(pending, 0);
       setUploadStatus(uploadProgressLabel(pending));
     }
+    if (uploadCanceled) { await Q.clearPending(); return; }
     await drainUploadQueue(!!resuming);
   } catch (e) {
-    if (uploadCanceled || e.name === 'AbortError' || e.message === '__canceled__') {
+    if (uploadCanceled) return; // The cancel handler owns cleanup confirmation and UI.
+    if (e.name === 'AbortError' || e.message === '__canceled__') {
       setPhase('pick');
       resetSendButton();
       valid();

@@ -53,12 +53,16 @@ export class FreightServer {
   private shipments: Shipment[] = [];
   private batch?: Batch;
   private canceledBatches = new Set<string>();
+  private completedBatches = new Map<string, Batch>();
+  private cancellations = new Map<string, Promise<void>>();
+  private activeFinish?: { batch: Batch; done: Promise<void> };
   private port = 0;
   private preferredAddress = '';
   private useTailscale = false;
   private error = '';
   private writing = false;
   private writingBatchId?: string;
+  private activeWrite?: { done: Promise<void>; request: http.IncomingMessage };
   private persistence: Promise<void> = Promise.resolve();
   constructor(private settings: string, private tlsManager: PhoneTlsManager) {}
   async start() {
@@ -149,27 +153,45 @@ export class FreightServer {
       if ((await fs.readdir(dir)).length === 0) await fs.rmdir(dir);
     } catch { /* not empty or missing */ }
   }
-  private async abandonBatch() {
-    const batch = this.batch;
-    this.batch = undefined;
-    if (!batch) return;
-    if (this.writing && this.writingBatchId === batch.id) {
-      await new Promise(r => setTimeout(r, 100));
+  private abandonBatch(batch = this.batch): Promise<void> {
+    if (!batch) return Promise.resolve();
+    const pending = this.cancellations.get(batch.id);
+    if (pending) return pending;
+    const cleanup = this.cleanupBatch(batch).finally(() => this.cancellations.delete(batch.id));
+    this.cancellations.set(batch.id, cleanup);
+    return cleanup;
+  }
+  private async cleanupBatch(batch: Batch) {
+    this.canceledBatches.add(batch.id);
+    if (this.activeFinish?.batch === batch) await this.activeFinish.done;
+    if (this.writingBatchId === batch.id && this.activeWrite) {
+      const write = this.activeWrite;
+      // Stop a slow request body, then wait for any open file handle to close.
+      if (!write.request.complete) write.request.destroy();
+      await write.done;
     }
     const prefix = `_${batch.id.slice(0, 8)}_`;
+    const remove = async (file: string) => {
+      try { await fs.unlink(file); }
+      catch (e: any) { if (e.code !== 'ENOENT') throw new Error('Could not remove canceled upload files. Retry Cancel upload.'); }
+    };
     for (const f of batch.files) {
-      if (f.saved) { try { await fs.unlink(f.saved); } catch { /* already removed */ } f.saved = undefined; }
+      if (f.saved) { await remove(f.saved); f.saved = undefined; }
     }
+    let names: string[];
     try {
-      for (const name of await fs.readdir(batch.uploadDir)) {
-        if (name.includes(prefix)) {
-          try {
-            await fs.unlink(path.join(batch.uploadDir, name));
-          } catch { /* already removed */ }
-        }
-      }
-    } catch { /* folder may be missing */ }
+      names = await fs.readdir(batch.uploadDir);
+    } catch (e: any) { if (e.code !== 'ENOENT') throw e; names = []; }
+    for (const name of names) if (name.includes(prefix)) await remove(path.join(batch.uploadDir, name));
     await this.removeEmptyUploadSubfolder(batch.uploadDir, batch.shipment.folder);
+    if (this.completedBatches.get(batch.shipment.id) === batch) {
+      batch.shipment.closed = false;
+      batch.shipment.pictures -= batch.files.length;
+      try { await this.persist(); }
+      catch (e) { batch.shipment.closed = true; batch.shipment.pictures += batch.files.length; throw e; }
+      this.completedBatches.delete(batch.shipment.id);
+    }
+    if (this.batch === batch) this.batch = undefined;
   }
   private async listShipmentSubfolderNames(shipmentFolder: string) {
     try {
@@ -415,14 +437,22 @@ export class FreightServer {
       res.end(JSON.stringify({ error: 'Rename shipments on the desktop toolkit only.' }));
       return;
     }
-    if (!shipment || shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
-    if (req.method === 'POST' && url.pathname === '/cancel-active') {
-      if (this.batch && this.batch.shipment === shipment) await this.abandonBatch();
+    if (!shipment) throw new Error('Shipment not found.');
+    if (req.method === 'POST' && (url.pathname === '/cancel' || url.pathname === '/cancel-active')) {
+      const batchId = url.searchParams.get('batch');
+      const active = this.batch?.shipment === shipment ? this.batch : undefined;
+      // The phone may still show Cancel while the final response is in flight.
+      const completed = batchId ? this.completedBatches.get(shipment.id) : undefined;
+      const target = active && (!batchId || active.id === batchId) ? active
+        : completed?.id === batchId ? completed : undefined;
+      if (target) await this.abandonBatch(target);
       json({ canceled: true });
       return;
     }
+    if (shipment.closed) throw new Error('This shipment is complete. Ask the desktop user to select Reupload.');
     if (req.method === 'POST' && url.pathname === '/batch') {
       const data = JSON.parse((await this.body(req, 100000)).toString());
+      if (this.batch && this.canceledBatches.has(this.batch.id)) throw new Error('Retry Cancel upload to finish desktop cleanup first.');
       if (
         data.batchId &&
         this.batch &&
@@ -462,6 +492,7 @@ export class FreightServer {
       }
       if (!Array.isArray(data.files) || data.files.length < 1 || data.files.length > MAX_FREIGHT_PICTURES || data.pallets !== data.files.length) throw new Error('Select 1 to 26 pictures and confirm one picture per pallet.');
       for (const f of data.files) if (typeof f.name !== 'string' || !/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(f.name) || !Number.isInteger(f.size) || f.size < 1 || f.size > 100 * 1024 * 1024 || (f.hash !== undefined && !/^[a-f0-9]{64}$/.test(f.hash))) throw new Error('Choose image files up to 100 MB each.');
+      this.completedBatches.delete(shipment.id);
       const uploadDir = this.uploadDirForShipment(shipment);
       await fs.mkdir(uploadDir, { recursive: true });
       this.batch = {
@@ -480,17 +511,6 @@ export class FreightServer {
         this.batch.phoneUploadChannel = data.uploadChannel;
       }
       json({ id: this.batch.id, uploadFolder: this.batch.uploadFolderLabel, total: this.batch.files.length, completed: 0 });
-      return;
-    }
-    if (req.method === 'POST' && url.pathname === '/cancel') {
-      const batchIdParam = url.searchParams.get('batch');
-      if (batchIdParam) {
-        this.canceledBatches.add(batchIdParam);
-      }
-      if (this.batch && this.batch.shipment === shipment && (!batchIdParam || this.batch.id === batchIdParam)) {
-        await this.abandonBatch();
-      }
-      json({ canceled: true });
       return;
     }
     const batch = this.batch;
@@ -513,7 +533,8 @@ export class FreightServer {
       req.once('aborted', markAborted);
       this.writing = true;
       this.writingBatchId = batch.id;
-      let savedPath: string | undefined;
+      let releaseWrite!: () => void;
+      this.activeWrite = { request: req, done: new Promise<void>(resolve => { releaseWrite = resolve; }) };
       try {
         const expectedHash = f.hash ?? req.headers['x-picture-sha256'];
         if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Picture checksum is required. Retry.');
@@ -530,37 +551,8 @@ export class FreightServer {
         let saveExt: string;
         try { saveExt = validateFreightImage(bytes, f.name); } catch (e) { throw e; }
         f.hash = expectedHash;
-        if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; savedPath = target; }
+        if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
         if (this.canceledBatches.has(batch.id)) {
-          if (savedPath) {
-            try {
-              await fs.unlink(savedPath);
-            } catch (e) {
-              console.error('Failed to delete canceled file:', savedPath, e);
-            }
-          }
-          if (f.saved && f.saved !== savedPath) {
-            try {
-              await fs.unlink(f.saved);
-            } catch (e) {
-              console.error('Failed to delete canceled file f.saved:', f.saved, e);
-            }
-          }
-          try {
-            const prefix = `_${batch.id.slice(0, 8)}_`;
-            for (const name of await fs.readdir(batch.uploadDir)) {
-              if (name.includes(prefix)) {
-                try {
-                  await fs.unlink(path.join(batch.uploadDir, name));
-                } catch (e) {
-                  console.error('Failed to delete file:', name, e);
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Failed to read upload dir:', batch.uploadDir, e);
-          }
-          await this.removeEmptyUploadSubfolder(batch.uploadDir, batch.shipment.folder);
           res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
           return;
@@ -572,7 +564,7 @@ export class FreightServer {
           return;
         }
         throw e;
-      } finally { this.writing = false; this.writingBatchId = undefined; }
+      } finally { this.writing = false; this.writingBatchId = undefined; this.activeWrite = undefined; releaseWrite(); }
       return;
     }
     if (req.method === 'POST' && url.pathname === '/finish') {
@@ -581,11 +573,19 @@ export class FreightServer {
         res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
         return;
       }
+      if (this.activeFinish) throw new Error('Desktop verification is already in progress.');
       if (this.writing) throw new Error('Wait for the current picture to save.');
-      for (const f of batch.files) { if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.'); const bytes = await fs.readFile(f.saved); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.'); }
-      shipment.closed = true; shipment.pictures += batch.files.length; shipment.lastUploadSubfolder = batch.uploadFolderLabel;
-      try { await this.persist(); } catch (e) { shipment.closed = false; shipment.pictures -= batch.files.length; throw e; }
-      this.batch = undefined; json({ complete: true, pictures: batch.files.length }); return;
+      let releaseFinish!: () => void;
+      this.activeFinish = { batch, done: new Promise<void>(resolve => { releaseFinish = resolve; }) };
+      try {
+        for (const f of batch.files) { if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.'); const bytes = await fs.readFile(f.saved); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.'); }
+        if (this.canceledBatches.has(batch.id) || this.batch !== batch) throw new Error('Upload canceled.');
+        shipment.closed = true; shipment.pictures += batch.files.length; shipment.lastUploadSubfolder = batch.uploadFolderLabel;
+        try { await this.persist(); } catch (e) { shipment.closed = false; shipment.pictures -= batch.files.length; throw e; }
+        this.completedBatches.set(shipment.id, batch);
+        if (this.batch === batch) this.batch = undefined;
+        json({ complete: true, pictures: batch.files.length }); return;
+      } finally { this.activeFinish = undefined; releaseFinish(); }
     }
     throw new Error('Unknown request.');
   }
