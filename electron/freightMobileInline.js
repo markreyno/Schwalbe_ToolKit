@@ -6,6 +6,9 @@ const el = id => document.getElementById(id);
 const uploadQueue = () => window.FreightUploadQueue;
 let selected = [], batch = null, busy = false, mode = false, urls = [], activeXhr = null, uploadCanceled = false, finishAbort = null;
 let saveTarget = '', uiPhase = 'pick', activeProgressPending = null, uploadSwReady = null, activeUploadChannel = 'page', swProgressListener = null;
+let draftWriting = false, nextDraftId = 0, previewVersion = 0, previewQueue = Promise.resolve(), preparingSelection;
+const draftIds = new WeakMap();
+const portraitPhotos = new WeakMap();
 let cardCompany = '', cardDateIso = '';
 
 function pendingBytesApi() {
@@ -141,6 +144,7 @@ function setPhase(phase) {
   const picking = phase === 'pick';
   const session = phase === 'uploading' || phase === 'done' || phase === 'error';
   el('capture-block').hidden = !picking;
+  if (!picking) clearPreviews();
   el('upload-session').hidden = !session;
   setPickChromeVisible(picking);
   if (el('new-shipment-nav')) el('new-shipment-nav').hidden = !(picking || phase === 'error');
@@ -191,67 +195,256 @@ function validatePendingFiles(pending) {
   }
 }
 function valid() {
-  el('send').disabled = busy || !selected.length || selected.length > 26 || Number(el('pallets').value) !== selected.length || !el('confirm').checked;
+  el('send').disabled = busy || draftWriting || !selected.length || selected.length > 26 || Number(el('pallets').value) !== selected.length || !el('confirm').checked;
 }
-function render() {
+function clearPreviews() {
+  previewVersion++;
+  el('previews').replaceChildren();
   urls.forEach(URL.revokeObjectURL);
   urls = [];
-  el('previews').replaceChildren();
-  selected.forEach((f, i) => {
+}
+
+async function changeDraft(change) {
+  draftWriting = true;
+  document.querySelectorAll('.capture-actions input, .tile button').forEach(input => { input.disabled = true; });
+  el('confirm').checked = false;
+  valid();
+  try { await change(); }
+  catch { message('The browser could not save the draft for reload. You can still upload here.'); }
+  finally {
+    draftWriting = false;
+    document.querySelectorAll('.capture-actions input').forEach(input => { input.disabled = false; });
+    render();
+  }
+}
+
+async function restoreDraft() {
+  try {
+    const draft = await uploadQueue().getDraft(key);
+    if (!draft.length) return;
+    selected = draft.map(({ id, file }) => { draftIds.set(file, id); return file; });
+    nextDraftId = draft.at(-1).id + 1;
+    el('pallets').value = selected.length;
+    render();
+    message('The page restarted. Your pictures are still here.');
+  } catch { /* The picker still works if draft storage is unavailable. */ }
+}
+
+function render() {
+  clearPreviews();
+  const version = previewVersion;
+  const jobs = selected.map(file => {
     const tile = document.createElement('div');
     tile.className = 'tile';
-    const img = document.createElement('img');
-    img.alt = f.name;
-    const u = URL.createObjectURL(f);
-    urls.push(u);
-    img.src = u;
+    const placeholder = document.createElement('p');
+    placeholder.textContent = 'Preview unavailable';
     const name = document.createElement('p');
-    name.textContent = f.name;
+    name.textContent = file.name;
     const remove = document.createElement('button');
     remove.textContent = 'Remove';
-    remove.onclick = () => { selected.splice(i, 1); el('confirm').checked = false; render(); };
-    tile.append(img, name, remove);
+    remove.onclick = () => {
+      selected = selected.filter(item => item !== file);
+      void changeDraft(() => uploadQueue().deleteDraft(key, draftIds.get(file)));
+    };
+    tile.append(placeholder, name, remove);
     el('previews').append(tile);
+    return { file, placeholder };
+  });
+  previewQueue = previewQueue.then(async () => {
+    for (const { file, placeholder } of jobs) {
+      if (version !== previewVersion) return;
+      try {
+        const blob = await scaledJpeg(file, 320, .75);
+        if (version !== previewVersion) return;
+        const url = URL.createObjectURL(blob);
+        urls.push(url);
+        const image = document.createElement('img');
+        image.alt = '';
+        image.src = url;
+        placeholder.replaceWith(image);
+      } catch { /* Unsupported image formats keep their placeholder. */ }
+    }
   });
   el('count').textContent = selected.length + ' pictures / ' + selected.length + ' pallets';
   valid();
 }
+
 for (const id of ['camera', 'files']) el(id).onchange = e => {
   const incoming = Array.from(e.target.files);
   e.target.value = '';
+  if (!incoming.length || busy || draftWriting) return;
   if (selected.length + incoming.length > 26) {
     message('You can select up to 26 pictures per upload. Remove pictures before adding more.');
     return;
   }
   selected.push(...incoming);
-  incoming.forEach(preparePicture);
-  el('confirm').checked = false;
-  render();
+  void changeDraft(async () => {
+    let failure;
+    for (const file of incoming) {
+      const id = nextDraftId++;
+      draftIds.set(file, id);
+      try { await uploadQueue().saveDraft(key, id, file); }
+      catch (error) { failure = error; }
+    }
+    if (failure) throw failure;
+  });
 };
 el('pallets').oninput = valid;
 el('confirm').onchange = valid;
 
-function sha256(bytes) { const K = [1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221, 3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580, 3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986, 2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895, 666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037, 2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344, 430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779, 1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298]; const H = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]; const n = bytes.length, b = new Uint8Array(Math.ceil((n + 9) / 64) * 64); b.set(bytes); b[n] = 128; const v = new DataView(b.buffer); v.setUint32(b.length - 4, n * 8); v.setUint32(b.length - 8, Math.floor(n / 536870912)); const r = (x, n) => (x >>> n) | (x << (32 - n)), w = new Uint32Array(64); for (let o = 0; o < b.length; o += 64) { for (let i = 0; i < 16; i++)w[i] = v.getUint32(o + i * 4); for (let i = 16; i < 64; i++) { const a = w[i - 15], z = w[i - 2]; w[i] = w[i - 16] + (r(a, 7) ^ r(a, 18) ^ (a >>> 3)) + w[i - 7] + (r(z, 17) ^ r(z, 19) ^ (z >>> 10)); } let [a, c, d, e, f, g, h, j] = H; for (let i = 0; i < 64; i++) { const t = (j + (r(f, 6) ^ r(f, 11) ^ r(f, 25)) + ((f & g) ^ (~f & h)) + K[i] + w[i]) >>> 0, u = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & c) ^ (a & d) ^ (c & d))) >>> 0; j = h; h = g; g = f; f = (e + t) >>> 0; e = d; d = c; c = a; a = (t + u) >>> 0; } const vals = [a, c, d, e, f, g, h, j]; for (let i = 0; i < 8; i++)H[i] = (H[i] + vals[i]) >>> 0; } return H.map(x => x.toString(16).padStart(8, '0')).join(''); }
-const preparation = new WeakMap();
-let hashWorker = null, workerSequence = 0, preparationQueue = Promise.resolve();
-const workerRequests = new Map();
-function getHashWorker() {
-  if (hashWorker) return hashWorker;
-  const source = sha256.toString() + ";onmessage=async({data})=>{try{const bytes=await data.file.arrayBuffer();const hash=self.crypto?.subtle?Array.from(new Uint8Array(await self.crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join(''):sha256(new Uint8Array(bytes));postMessage({id:data.id,hash})}catch(e){postMessage({id:data.id,error:e.message})}}";
-  const workerUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-  hashWorker = new Worker(workerUrl); URL.revokeObjectURL(workerUrl);
-  hashWorker.onmessage = ({ data }) => { const resolve = workerRequests.get(data.id); workerRequests.delete(data.id); resolve?.(data); };
-  hashWorker.onerror = () => { for (const resolve of workerRequests.values()) resolve({ error: 'Could not prepare the picture. Refresh and try again.' }); workerRequests.clear(); hashWorker.terminate(); hashWorker = null; };
-  return hashWorker;
+// Use the browser's EXIF-aware decoding and ask it for reduced pixels.
+async function scaledJpeg(file,limit,quality){
+  let portrait=portraitPhotos.get(file);
+  if(portrait===undefined){
+    const probe=await createImageBitmap(file,{imageOrientation:'from-image',resizeWidth:64,resizeQuality:'low'});
+    portrait=probe.height>probe.width;
+    probe.close();
+    portraitPhotos.set(file,portrait);
+  }
+  const bitmap=await createImageBitmap(file,{
+    imageOrientation:'from-image',
+    [portrait?'resizeHeight':'resizeWidth']:limit,
+    resizeQuality:limit===320?'low':'high',
+  });
+  const canvas=document.createElement('canvas');
+  try{
+    const ratio=Math.min(1,limit/Math.max(bitmap.width,bitmap.height));
+    canvas.width=Math.max(1,Math.round(bitmap.width*ratio));
+    canvas.height=Math.max(1,Math.round(bitmap.height*ratio));
+    canvas.getContext('2d',{alpha:false}).drawImage(bitmap,0,0,canvas.width,canvas.height);
+    bitmap.close();
+    return await new Promise((resolve,reject)=>canvas.toBlob(blob=>{
+      if(blob)resolve(blob);else reject(Error('Could not resize picture'));
+    },'image/jpeg',quality));
+  }finally{bitmap.close();canvas.width=0;canvas.height=0}
 }
-function preparePicture(file) {
-  if (preparation.has(file)) return preparation.get(file);
-  const promise = preparationQueue.then(() => new Promise(resolve => {
-    try { const worker = getHashWorker(), id = ++workerSequence; workerRequests.set(id, resolve); worker.postMessage({ id, file }); }
-    catch (e) { resolve({ error: e.message }); }
-  }));
-  preparation.set(file, promise); preparationQueue = promise.then(() => { }); return promise;
+
+
+const extensions={
+  'image/jpeg':'jpg','image/png':'png','image/heic':'heic','image/heif':'heif',
+  'image/webp':'webp','image/gif':'gif','image/bmp':'bmp','image/tiff':'tiff','image/avif':'avif',
+};
+async function inferExtension(file){
+  const mime=Object.hasOwn(extensions,file.type)?extensions[file.type]:null;
+  if(mime)return mime;
+  const bytes=new Uint8Array(await file.slice(0,64).arrayBuffer());
+  const ascii=(start,end)=>String.fromCharCode(...bytes.subarray(start,end));
+  if(bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return 'jpg';
+  if(bytes[0]===137&&ascii(1,4)==='PNG')return 'png';
+  if(/^GIF8[79]a$/.test(ascii(0,6)))return 'gif';
+  if(ascii(0,4)==='RIFF'&&ascii(8,12)==='WEBP')return 'webp';
+  if(ascii(0,2)==='BM')return 'bmp';
+  if(ascii(0,4)==='II*\0'||ascii(0,4)==='MM\0*')return 'tiff';
+  if(ascii(4,8)==='ftyp'){
+    const size=new DataView(bytes.buffer).getUint32(0);
+    const brands=[ascii(8,12)];
+    for(let i=16;i+4<=Math.min(bytes.length,size);i+=4)brands.push(ascii(i,i+4));
+    if(brands.some(brand=>/^(avif|avis)$/.test(brand)))return 'avif';
+    if(brands.some(brand=>/^(hei[cxms]|hev[cxms])$/.test(brand)))return 'heic';
+    if(brands.some(brand=>/^m[is]f1$/.test(brand)))return 'heif';
+  }
+  throw Error('Could not identify the format of '+file.name+'.');
 }
+async function prepareSelection(files) {
+  await previewQueue;
+  let resized = 0, skipped = 0;
+  const attempted = new Set();
+  const outgoing = [...files];
+  async function resize(i) {
+    if (uploadCanceled) throw Error('__canceled__');
+    attempted.add(i);
+    setUploadStatus('Preparing picture ' + (i + 1) + ' of ' + files.length);
+    const file = files[i];
+    let jpeg;
+    try { jpeg = await scaledJpeg(file, 4000, .9); } catch { skipped++; return; }
+    if (jpeg.size >= file.size) { skipped++; return; }
+    outgoing[i] = new File([jpeg], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg', lastModified: file.lastModified });
+    resized++;
+  }
+  for (let i = 0; i < files.length; i++) {
+    if (files[i].size > 8 * 1024 * 1024) await resize(i);
+  }
+  if (outgoing.reduce((size, file) => size + file.size, 0) > 150 * 1024 * 1024) {
+    for (let i = 0; i < files.length; i++) {
+      if (!attempted.has(i)) await resize(i);
+    }
+  }
+  for (let i = 0; i < outgoing.length; i++) {
+    const file = outgoing[i];
+    if (!/\.[^./\\]+$/.test(file.name)) {
+      const extension = await inferExtension(file);
+      outgoing[i] = new File([file], file.name + '.' + extension, { type: file.type, lastModified: file.lastModified });
+    }
+  }
+  const resizeNote = [
+    resized === 1 ? '1 large photo was resized for upload.' : resized ? resized + ' large photos were resized for upload.' : '',
+    skipped ? 'Some photos could not be reduced and will upload at original quality.' : '',
+  ].filter(Boolean).join(' ');
+  return { files: outgoing, resizeNote };
+}
+
+async function sha256(file){
+  const K=[1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,2428436474,2756734187,3204031479,3329325298];
+  const H=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225];
+  const rotate=(value,bits)=>(value>>>bits)|(value<<(32-bits));
+  const words=new Uint32Array(64);
+  function compress(view){
+    for(let offset=0;offset<view.byteLength;offset+=64){
+      for(let i=0;i<16;i++)words[i]=view.getUint32(offset+i*4);
+      for(let i=16;i<64;i++){
+        const first=words[i-15], second=words[i-2];
+        const small0=rotate(first,7)^rotate(first,18)^(first>>>3);
+        const small1=rotate(second,17)^rotate(second,19)^(second>>>10);
+        words[i]=words[i-16]+small0+words[i-7]+small1;
+      }
+      let [a,b,c,d,e,f,g,h]=H;
+      for(let i=0;i<64;i++){
+        const sum1=rotate(e,6)^rotate(e,11)^rotate(e,25);
+        const choose=(e&f)^(~e&g);
+        const temp1=(h+sum1+choose+K[i]+words[i])>>>0;
+        const sum0=rotate(a,2)^rotate(a,13)^rotate(a,22);
+        const majority=(a&b)^(a&c)^(b&c);
+        const temp2=(sum0+majority)>>>0;
+        h=g;g=f;f=e;e=(d+temp1)>>>0;
+        d=c;c=b;b=a;a=(temp1+temp2)>>>0;
+      }
+      const values=[a,b,c,d,e,f,g,h];
+      for(let i=0;i<8;i++)H[i]=(H[i]+values[i])>>>0;
+    }
+  }
+  const chunkSize=256*1024;
+  for(let offset=0;offset<file.size;offset+=chunkSize){
+    const bytes=new Uint8Array(await file.slice(offset,offset+chunkSize).arrayBuffer());
+    const aligned=bytes.length-bytes.length%64;
+    compress(new DataView(bytes.buffer,0,aligned));
+    if(offset+bytes.length===file.size)finish(bytes.subarray(aligned));
+  }
+  if(!file.size)finish(new Uint8Array());
+  function finish(tail){
+    const padded=new Uint8Array(tail.length<56?64:128);
+    padded.set(tail);padded[tail.length]=128;
+    const view=new DataView(padded.buffer);
+    view.setUint32(padded.length-8,Math.floor(file.size/536870912));
+    view.setUint32(padded.length-4,file.size*8);
+    compress(view);
+  }
+  return H.map(x=>x.toString(16).padStart(8,'0')).join('');
+}
+function hashPicture(file){
+  return new Promise((resolve,reject)=>{
+    const source=sha256.toString()+";onmessage=async({data})=>{try{postMessage({hash:await sha256(data)})}catch(e){postMessage({error:e.message})}}";
+    const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+    let worker;
+    try{worker=new Worker(url)}finally{URL.revokeObjectURL(url)}
+    worker.onmessage=({data})=>{
+      worker.terminate();
+      if(data.error)reject(Error(data.error));else resolve(data.hash);
+    };
+    worker.onerror=()=>{worker.terminate();reject(Error('Could not calculate the picture checksum.'))};
+    try{worker.postMessage(file)}catch(e){worker.terminate();reject(e)}
+  });
+}
+
 /** @deprecated file-count progress; prefer setUploadProgressBytes */
 function setUploadProgress(completedUnits, total) {
   const api = pendingBytesApi();
@@ -327,6 +520,7 @@ async function abortActiveBatch() {
   activeXhr?.abort();
   finishAbort?.abort();
   const Q = uploadQueue();
+  await preparingSelection?.catch(() => {});
   const pending = Q ? await Q.getPending() : null;
   // A batch request may already have reached the desktop. Wait for its ID before canceling.
   await pendingBatchRequest?.catch(() => {});
@@ -363,7 +557,7 @@ function goToPickStep() {
   setUploadError('');
   setPhase('pick');
   resetSendButton();
-  valid();
+  render();
   message('');
 }
 
@@ -390,7 +584,7 @@ async function resetAfterCancel() {
 
 el('upload-cancel-link').onclick = () => { void resetAfterCancel(); };
 
-el('upload-retry').onclick = () => { if (busy) return; setUploadError(''); void runUpload(true); };
+el('upload-retry').onclick = () => { if (busy) return; setUploadError(''); void uploadQueue().getPending().then(pending => runUpload(pending?.shipmentKey === key)); };
 
 el('upload-new-shipment').onclick = () => showShipmentSetup('', todayLocalIso());
 
@@ -561,6 +755,8 @@ function showCompletedUpload(shipment, total) {
   setPhase('done');
   setUploadProgressBytes(1, 1);
   setUploadStatus('Done, ' + (total || shipment?.pictures || 0) + ' pictures uploaded');
+  selected = [];
+  void uploadQueue()?.deleteDraft(key).catch(() => {});
 }
 
 async function reconcilePendingWithDesktop(pending, state) {
@@ -847,21 +1043,27 @@ async function runUpload(resuming) {
   setCaptureDisabled(true);
   setUploadError('');
   hideBackgroundSyncNote();
+  if (!resuming) el('resize-note').textContent = '';
   try {
     const Q = uploadQueue();
     if (!Q) throw Error('Upload queue is unavailable. Refresh and try again.');
     if (!resuming) {
-      const hashFile = async file => {
-        const prepared = await preparePicture(file);
-        if (prepared.error) throw Error(prepared.error);
-        return prepared.hash;
-      };
-      await Q.createFromSelection({
-        shipmentKey: key,
-        pallets: Number(el('pallets').value),
-        files: selected,
-        hashFile
-      });
+      preparingSelection = (async () => {
+        const { files, resizeNote } = await prepareSelection(selected);
+        if (uploadCanceled) throw Error('__canceled__');
+        el('resize-note').textContent = resizeNote;
+        await Q.createFromSelection({
+          shipmentKey: key,
+          pallets: Number(el('pallets').value),
+          files,
+          resizeNote,
+          hashFile: file => {
+            if (uploadCanceled) throw Error('__canceled__');
+            return hashPicture(file);
+          }
+        });
+      })();
+      try { await preparingSelection; } finally { preparingSelection = null; }
       const pending = await Q.getPending();
       syncProgressFromPending(pending, 0);
       setUploadStatus(uploadProgressLabel(pending));
@@ -927,6 +1129,7 @@ async function resumePendingUploadIfAny(state, backgroundFetch) {
     el('send').textContent = mode ? 'Reupload All' : 'Upload All';
   }
   el('pallets').value = String(pending.pallets);
+  el('resize-note').textContent = pending.resizeNote || '';
   setUploadStatus(uploadProgressLabel(pending));
   if (backgroundFetch) {
     busy = true;
@@ -1048,6 +1251,7 @@ api('/state').then(async s => {
     el('mode').textContent = mode ? 'Reupload: new pictures will be added; existing pictures are preserved.' : 'Collect your pictures, then confirm the pallet amount.';
     el('send').textContent = mode ? 'Reupload All' : 'Upload All';
     setPhase('pick');
+    await restoreDraft();
     setInterval(() => { void refreshSaveTarget(); }, 5000);
   }
 }).catch(e => message(e.message));

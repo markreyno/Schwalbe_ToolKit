@@ -1,6 +1,6 @@
-import { MAX_FREIGHT_PICTURES, validateFreightImage } from './freightValidation';
+import { MAX_FREIGHT_PICTURES, validateFreightImageFile } from './freightValidation';
 import { resolveFreightUploadDirectory, sanitizeFreightUploadFolderName } from './freightFolderName';
-import { readFileSync } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import type http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -543,20 +543,41 @@ export class FreightServer {
       try {
         const expectedHash = f.hash ?? req.headers['x-picture-sha256'];
         if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Picture checksum is required. Retry.');
-        const bytes = await this.body(req, f.size);
-        if (f.saved && f.hash === expectedHash) {
-          json({ saved: true, duplicate: true });
-          return;
+        const duplicate = f.saved && f.hash === expectedHash;
+        const temp = path.join(batch.uploadDir, batch.id + '_' + index + '.part');
+        const handle = duplicate ? null : await fs.open(temp, 'wx+');
+        try {
+          let size = 0;
+          const hash = createHash('sha256');
+          let saveExt = '';
+          try {
+            for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+              size += chunk.length;
+              if (size > f.size) {
+                req.resume();
+                throw new Error('Upload exceeds the allowed size.');
+              }
+              if (handle) {
+                hash.update(chunk);
+                await handle.writeFile(chunk);
+              }
+            }
+            if (duplicate) { json({ saved: true, duplicate: true }); return; }
+            if (clientAborted || req.aborted) { if (!res.headersSent) res.end(); return; }
+            if (this.canceledBatches.has(batch.id)) throw new Error('Upload canceled.');
+            if (size !== f.size || hash.digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
+            saveExt = await validateFreightImageFile(handle!, size);
+            await handle!.sync();
+          } finally {
+            await handle?.close();
+          }
+          const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`);
+          await fs.rename(temp, target);
+          f.hash = expectedHash;
+          f.saved = target;
+        } finally {
+          if (handle) await fs.rm(temp, { force: true });
         }
-        if (clientAborted || req.aborted) {
-          if (!res.headersSent) res.end();
-          return;
-        }
-        if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw new Error('Picture transfer was incomplete. Retry.');
-        let saveExt: string;
-        try { saveExt = validateFreightImage(bytes, f.name); } catch (e) { throw e; }
-        f.hash = expectedHash;
-        if (!f.saved) { const target = path.join(batch.uploadDir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${batch.id.slice(0,8)}_${index + 1}${saveExt}`); const temp = target + '.part'; const handle = await fs.open(temp, 'w'); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await fs.rename(temp, target); f.saved = target; }
         if (this.canceledBatches.has(batch.id)) {
           res.writeHead(410, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ error: 'Upload canceled', canceled: true }));
@@ -583,7 +604,16 @@ export class FreightServer {
       let releaseFinish!: () => void;
       this.activeFinish = { batch, done: new Promise<void>(resolve => { releaseFinish = resolve; }) };
       try {
-        for (const f of batch.files) { if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.'); const bytes = await fs.readFile(f.saved); if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.'); }
+        for (const f of batch.files) {
+          if (!f.saved) throw new Error('Some pictures have not uploaded. Retry the upload.');
+          let size = 0;
+          const hash = createHash('sha256');
+          for await (const chunk of createReadStream(f.saved)) {
+            size += chunk.length;
+            hash.update(chunk);
+          }
+          if (size !== f.size || hash.digest('hex') !== f.hash) throw new Error('Desktop verification failed. Retry.');
+        }
         if (this.canceledBatches.has(batch.id) || this.batch !== batch) throw new Error('Upload canceled.');
         shipment.closed = true; shipment.pictures += batch.files.length; shipment.lastUploadSubfolder = batch.uploadFolderLabel;
         try { await this.persist(); } catch (e) { shipment.closed = false; shipment.pictures -= batch.files.length; throw e; }
