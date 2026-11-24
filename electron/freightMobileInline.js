@@ -23,12 +23,9 @@ function setUploadProgressBytes(doneBytes, totalBytes) {
   const total = Math.max(1, Number(totalBytes) || 1);
   let done = Number(doneBytes);
   if (!Number.isFinite(done)) done = 0;
-  const pct = Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+  const pct = Math.min(100, Math.max(0, (done / total) * 100));
   if (fill) fill.style.width = pct + '%';
-  if (track) {
-    track.setAttribute('aria-valuenow', String(pct));
-    track.setAttribute('aria-valuetext', pct + '%');
-  }
+  if (track) track.setAttribute('aria-valuenow', String(Math.floor(pct)));
 }
 
 function syncProgressFromPending(pending, extraDoneBytes) {
@@ -69,8 +66,10 @@ function setUploadCardMeta(company, dateIso) {
   if (el('upload-date')) el('upload-date').textContent = formatDisplayDate(cardDateIso);
 }
 
-function setUploadStatus(text) {
-  if (el('upload-status')) el('upload-status').textContent = text || '';
+function setUploadStatus(text, waiting = false) {
+  const status = el('upload-status');
+  status.toggleAttribute('data-waiting', waiting);
+  if (status.textContent !== (text || '')) status.textContent = text || '';
 }
 
 function setUploadError(text) {
@@ -353,7 +352,7 @@ async function prepareSelection(files) {
   async function resize(i) {
     if (uploadCanceled) throw Error('__canceled__');
     attempted.add(i);
-    setUploadStatus('Preparing picture ' + (i + 1) + ' of ' + files.length);
+    setUploadStatus('Preparing picture ' + (i + 1) + ' of ' + files.length, true);
     const file = files[i];
     let jpeg;
     try { jpeg = await scaledJpeg(file, 4000, .9); } catch { skipped++; return; }
@@ -482,6 +481,12 @@ function uploadPicture(blob, index, hash, pending) {
         syncProgressFromPending(pending, e.loaded);
         setUploadStatus(uploadProgressLabel(pending));
       }
+    };
+    xhr.upload.onload = () => {
+      if (uploadCanceled) return;
+      lastProgressAt = Date.now();
+      syncProgressFromPending(pending, blob.size);
+      setUploadStatus('Saving picture ' + (index + 1) + ' of ' + pending.files.length + ' on desktop', true);
     };
     xhr.onload = () => {
       cleanup();
@@ -786,7 +791,7 @@ async function syncUploadProgressFromQueue() {
   let pending = await Q.getPending();
   if (pending && pending.shipmentKey !== key) return;
   pending = await reconcilePendingWithDesktop(pending);
-  if (!pending || uploadCanceled) return;
+  if (!pending || uploadCanceled || uiPhase !== 'uploading' || activeXhr || finishAbort) return;
   syncProgressFromPending(pending, 0);
   setUploadStatus(uploadProgressLabel(pending));
 }
@@ -956,7 +961,7 @@ async function finalizeVerifiedUpload(pending) {
   if (uploadCanceled || uiPhase === 'done') return;
   pending = await reconcilePendingWithDesktop(pending);
   if (!pending || uploadCanceled) return;
-  setUploadStatus('Verifying pictures…');
+  setUploadStatus('Verifying ' + pending.files.length + ' saved pictures…', true);
   finishAbort = new AbortController();
   try {
     await api('/finish?batch=' + batch.id, { method: 'POST', signal: finishAbort.signal });
@@ -1043,7 +1048,13 @@ async function runUpload(resuming) {
   setCaptureDisabled(true);
   setUploadError('');
   hideBackgroundSyncNote();
-  if (!resuming) el('resize-note').textContent = '';
+  if (!resuming) {
+    el('resize-note').textContent = '';
+    el('upload-progress-track').removeAttribute('aria-valuenow');
+    setUploadStatus('Preparing ' + selected.length + ' pictures…', true);
+  } else {
+    setUploadStatus('Checking saved pictures…', true);
+  }
   try {
     const Q = uploadQueue();
     if (!Q) throw Error('Upload queue is unavailable. Refresh and try again.');
@@ -1052,6 +1063,7 @@ async function runUpload(resuming) {
         const { files, resizeNote } = await prepareSelection(selected);
         if (uploadCanceled) throw Error('__canceled__');
         el('resize-note').textContent = resizeNote;
+        setUploadStatus('Preparing ' + files.length + ' pictures for transfer…', true);
         await Q.createFromSelection({
           shipmentKey: key,
           pallets: Number(el('pallets').value),
