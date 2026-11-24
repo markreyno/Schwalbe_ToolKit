@@ -304,7 +304,7 @@ test('cancel during resume deletes the batch', async ({ browser }) => {
       await route.continue();
     });
     await mobile.reload();
-    await expect(mobile.locator('#upload-status')).toContainText('Verifying pictures');
+    await expect(mobile.locator('#upload-status')).toContainText('Verifying 2 saved pictures');
     await mobile.getByRole('button', { name: 'Cancel upload', exact: true }).click();
     await mobile.unroute(/\/finish/);
     await expect(mobile.locator('#message')).toContainText('Upload canceled');
