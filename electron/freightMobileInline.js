@@ -10,6 +10,7 @@ let draftWriting = false, nextDraftId = 0, previewVersion = 0, previewQueue = Pr
 const draftIds = new WeakMap();
 const portraitPhotos = new WeakMap();
 let cardCompany = '', cardDateIso = '';
+let lastTransferPercent, progressStallTimer;
 
 function pendingBytesApi() {
   const Q = uploadQueue();
@@ -24,6 +25,15 @@ function setUploadProgressBytes(doneBytes, totalBytes) {
   let done = Number(doneBytes);
   if (!Number.isFinite(done)) done = 0;
   const pct = Math.min(100, Math.max(0, (done / total) * 100));
+  if (uiPhase === 'uploading') {
+    // Queue polls report saved bytes and can lag behind the current picture transfer.
+    if (lastTransferPercent !== undefined && pct <= lastTransferPercent) return;
+    lastTransferPercent = pct;
+    clearTimeout(progressStallTimer);
+    progressStallTimer = setTimeout(() => {
+      track?.removeAttribute('aria-valuenow');
+    }, 3000);
+  }
   if (fill) fill.style.width = pct + '%';
   if (track) track.setAttribute('aria-valuenow', String(Math.floor(pct)));
 }
@@ -140,6 +150,12 @@ function showShipmentSetup(prefillCompany, prefillDate) {
 
 function setPhase(phase) {
   uiPhase = phase;
+  clearTimeout(progressStallTimer);
+  if (phase === 'uploading') {
+    lastTransferPercent = undefined;
+  } else {
+    setUploadProgressBytes(phase === 'done' ? 100 : lastTransferPercent ?? 0, 100);
+  }
   const picking = phase === 'pick';
   const session = phase === 'uploading' || phase === 'done' || phase === 'error';
   el('capture-block').hidden = !picking;
